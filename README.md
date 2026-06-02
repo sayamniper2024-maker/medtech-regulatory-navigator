@@ -66,7 +66,7 @@ Example devices to try:
 ## Run Locally
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/medtech-regulatory-navigator
+git clone[ https://github.com/sayamniper2024-maker/medtech-regulatory-navigator]
 cd medtech-regulatory-navigator
 pip install -r requirements.txt
 streamlit run app.py
