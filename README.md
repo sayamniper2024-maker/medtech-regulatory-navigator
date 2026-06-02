@@ -29,7 +29,7 @@ recommendation in under 10 seconds.
 
 ## Live Demo
 
-Try it here: **[medtech-navigator.streamlit.app](https://your-app-url.streamlit.app)**
+Try it here: **[medtech-navigator.streamlit.app](https://medtech-regulatory-navigator-e7khygzx9hreudkxtfdk2x.streamlit.app/)**
 
 Example devices to try:
 - `Smart insulin pen with dose tracking`
