@@ -5,7 +5,7 @@ readme = '''# 🧬 MedTech Regulatory Pathway Navigator
 > AI-powered decision-support tool that recommends the optimal regulatory pathway
 > for any medical device across **CDSCO (India)**, **FDA 510(k)/PMA (USA)**, and **CE Mark (EU MDR)**.
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://your-app-url.streamlit.app)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://medtech-regulatory-navigator-e7khygzx9hreudkxtfdk2x.streamlit.app/)
 
 ---
 
