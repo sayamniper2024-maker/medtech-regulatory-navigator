@@ -30,8 +30,14 @@ RISK_COLOR = {
     "Low":"#1D9E75","Medium":"#BA7517","High":"#D85A30","Critical":"#E24B4A"
 }
 
-@st.cache_data(show_spinner=False)
+# In-memory cache — persists for the whole session
+if "classify_cache" not in st.session_state:
+    st.session_state.classify_cache = {}
+
 def ai_classify_device(device_name, device_description=""):
+    cache_key = f"{device_name.lower().strip()}_{device_description.lower().strip()}"
+    if cache_key in st.session_state.classify_cache:
+        return st.session_state.classify_cache[cache_key]
     prompt = f"""You are a senior medical device regulatory affairs expert.
 Classify this device across all 6 frameworks. Return ONLY valid JSON.
 
@@ -87,7 +93,9 @@ Return exactly this structure:
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"): raw = raw[4:]
-    return json.loads(raw.strip())
+    result = json.loads(raw.strip())
+    st.session_state.classify_cache[cache_key] = result
+    return result
 
 def get_timeline(data, fw):
     key = "timeline_months"
