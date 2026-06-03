@@ -7,7 +7,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.x-red?logo=streamlit)
 ![AI Powered](https://img.shields.io/badge/AI-Groq%20LLaMA%203.3-purple)
-![License](https://img.shields.io/badge/License-MIT-green)
+![License]
 
 ---
 
