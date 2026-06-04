@@ -320,7 +320,7 @@ with st.sidebar:
                            mime="text/csv", use_container_width=True)
 
 # ── Header ────────────────────────────────────────────────────────────────────
-st.markdown("## 🧬 MedTech Regulatory Pathway Navigator")
+st.markdown("##  MedTech Regulatory Pathway Navigator")
 st.markdown("*AI-powered classification across 6 global regulatory frameworks*")
 st.divider()
 
