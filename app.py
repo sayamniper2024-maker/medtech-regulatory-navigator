@@ -14,6 +14,8 @@ client = Groq(api_key=GROQ_API_KEY)
 # ── Session cache — same device never calls API twice ────────────────────────
 if "classify_cache" not in st.session_state:
     st.session_state.classify_cache = {}
+if "search_history" not in st.session_state:
+    st.session_state.search_history = []
 
 # ── Framework config ─────────────────────────────────────────────────────────
 FRAMEWORKS = {
@@ -128,27 +130,110 @@ Return ONLY the JSON. No text before or after."""
     result = json.loads(raw.strip())
     st.session_state.classify_cache[cache_key] = result
     return result
+from fpdf import FPDF
+import io
 
+def generate_pdf(data, selected_fws):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_margins(15, 15, 15)
+
+    # ── Header ───────────────────────────────────────────────────────────────
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.cell(0, 10, "MedTech Regulatory Pathway Report", ln=True, align="C")
+    pdf.set_font("Helvetica", "", 11)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 8, f"Device: {data['device_name']}", ln=True, align="C")
+    pdf.cell(0, 8, f"Intended use: {data['intended_use']}", ln=True, align="C")
+    pdf.cell(0, 6, f"AI Confidence: {data.get('confidence','—')}", ln=True, align="C")
+    pdf.ln(6)
+
+    # ── Divider ───────────────────────────────────────────────────────────────
+    pdf.set_draw_color(200, 200, 200)
+    pdf.line(15, pdf.get_y(), 195, pdf.get_y())
+    pdf.ln(6)
+
+    fw_labels = {
+        "cdsco":"CDSCO (India)", "fda":"FDA (USA)",
+        "eu":"CE Mark (EU)", "health_canada":"Health Canada",
+        "japan":"Japan PMDA", "australia":"Australia TGA"
+    }
+    pathway_key = {
+        "cdsco":"license_type", "fda":"pathway",
+        "eu":"technical_file_type", "health_canada":"licence_type",
+        "japan":"approval_type", "australia":"artg_pathway"
+    }
+
+    for fw in selected_fws:
+        d = data[fw]
+        label = fw_labels.get(fw, fw.upper())
+
+        # Framework heading
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_text_color(30, 158, 117)
+        pdf.cell(0, 9, label, ln=True)
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Helvetica", "", 10)
+
+        # Key details table
+        fields = [
+            ("Risk class",    d.get("risk_class", "—")),
+            ("Pathway",       d.get(pathway_key.get(fw,""), "—")),
+            ("Timeline",      f"{d.get('timeline_months','—')} months"),
+            ("Reasoning",     d.get("reasoning", "—")),
+        ]
+        for label_f, value in fields:
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.cell(45, 7, f"{label_f}:", border=0)
+            pdf.set_font("Helvetica", "", 10)
+            # Handle long text wrapping
+            pdf.multi_cell(0, 7, str(value), border=0)
+
+        pdf.ln(4)
+        pdf.set_draw_color(220, 220, 220)
+        pdf.line(15, pdf.get_y(), 195, pdf.get_y())
+        pdf.ln(4)
+
+    # ── Footer ────────────────────────────────────────────────────────────────
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(150, 150, 150)
+    pdf.cell(0, 6,
+        "Disclaimer: For educational and scoping purposes only. "
+        "Verify with a qualified regulatory affairs professional.",
+        ln=True, align="C")
+
+    # Return as bytes
+    return bytes(pdf.output())
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🧬 Navigator")
     st.caption("6 global regulatory frameworks · Powered by Groq")
     st.divider()
 
+    # ── Comparison mode toggle ────────────────────────────────────────────────
+    compare_mode = st.checkbox("Compare two devices", value=False)
+
     input_mode = st.radio("Input method",
                           ["Type any device name", "Choose from preset list"])
     if input_mode == "Type any device name":
-        device_name = st.text_input("Device name",
-                                    placeholder="e.g. AI retinal scanner")
-        device_desc = st.text_area("Description (optional)", height=80,
-                                   placeholder="e.g. Uses deep learning to detect diabetic retinopathy")
+        device_name = st.text_input("Device 1",
+                                    placeholder="e.g. Pacemaker")
+        device_desc = st.text_area("Description 1 (optional)", height=60)
+        if compare_mode:
+            device_name2 = st.text_input("Device 2",
+                                         placeholder="e.g. AED Defibrillator")
+            device_desc2 = st.text_area("Description 2 (optional)", height=60)
+        else:
+            device_name2, device_desc2 = "", ""
     else:
         presets = sorted(["Pacemaker","Thermometer","Blood Pressure Monitor",
                    "Pulse Oximeter","ECG Machine","Ventilator",
                    "Surgical Scissors","Infusion Pump","MRI Scanner",
                    "HIV Test Kit","Glucose Meter","Bone Implant"])
-        device_name = st.selectbox("Select device", presets)
-        device_desc = ""
+        device_name  = st.selectbox("Device 1", presets)
+        device_desc  = ""
+        device_name2 = st.selectbox("Device 2", presets, index=1) if compare_mode else ""
+        device_desc2 = ""
 
     st.subheader("Target markets")
     cols_sb = st.columns(2)
@@ -165,6 +250,37 @@ with st.sidebar:
     st.divider()
     analyse = st.button("Analyse Device", type="primary", use_container_width=True)
 
+    # ── Search history ────────────────────────────────────────────────────────
+    if st.session_state.search_history:
+        st.divider()
+        st.subheader("History")
+        for i, h in enumerate(reversed(st.session_state.search_history[-5:])):
+            if st.button(
+                f"{h['device']} — {h['cdsco_class']} / {h['fda_class']} / {h['eu_class']}",
+                key=f"hist_{i}",
+                use_container_width=True
+            ):
+                # Reload result from cache — zero API calls
+                st.session_state["reload_device"] = h["device"]
+                st.rerun()
+
+        # CSV export
+        st.divider()
+        if len(st.session_state.search_history) > 0:
+            import pandas as pd, io
+            hist_df = pd.DataFrame([
+                {k: v for k, v in h.items() if k != "data"}
+                for h in st.session_state.search_history
+            ])
+            csv = hist_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Export history CSV",
+                data=csv,
+                file_name="regulatory_history.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown("## 🧬 MedTech Regulatory Pathway Navigator")
 st.markdown("*AI-powered classification across 6 global regulatory frameworks*")
@@ -174,6 +290,16 @@ if analyse and device_name.strip():
     with st.spinner(f"Classifying **{device_name}** across 6 frameworks..."):
         try:
             data = ai_classify_device(device_name.strip(), device_desc.strip())
+            # Save to history
+        st.session_state.search_history.append({
+            "device"     : data["device_name"],
+            "confidence" : data.get("confidence","—"),
+            "cdsco_class": data["cdsco"]["risk_class"],
+            "fda_class"  : data["fda"]["risk_class"],
+            "eu_class"   : data["eu"]["risk_class"],
+            "fastest"    : sorted_pairs[0][0] if markets else "—",
+            "data"       : data
+        })
         except Exception as e:
             st.error(f"Classification failed: {e}")
             st.stop()
@@ -200,7 +326,52 @@ if analyse and device_name.strip():
             st.caption(data[fw].get("reasoning",""))
 
     st.divider()
+# ── Radar chart (only in compare mode) ──────────────────────────────────
+    if compare_mode and device_name2.strip():
+        with st.spinner(f"Classifying {device_name2}..."):
+            data2 = ai_classify_device(device_name2.strip(), device_desc2.strip())
 
+        st.subheader("Device Comparison")
+        col_a, col_b = st.columns(2)
+        col_a.markdown(f"### Device 1: {data['device_name']}")
+        col_b.markdown(f"### Device 2: {data2['device_name']}")
+
+        # Radar chart
+        risk_score = {"Low":1,"Medium":2,"High":3,"Critical":4,"Unknown":0}
+        categories = [FRAMEWORKS[fw]["label"] for fw in selected_fws]
+        categories += [categories[0]]  # close the loop
+
+        vals1 = [risk_score.get(RISK_LEVEL.get(data[fw].get("risk_class",""),  "Unknown"), 0) for fw in selected_fws]
+        vals2 = [risk_score.get(RISK_LEVEL.get(data2[fw].get("risk_class",""), "Unknown"), 0) for fw in selected_fws]
+        vals1 += [vals1[0]]
+        vals2 += [vals2[0]]
+
+        fig_radar = go.Figure()
+        fig_radar.add_trace(go.Scatterpolar(
+            r=vals1, theta=categories,
+            fill="toself", name=data["device_name"],
+            line_color="#1D9E75", fillcolor="rgba(29,158,117,0.15)"
+        ))
+        fig_radar.add_trace(go.Scatterpolar(
+            r=vals2, theta=categories,
+            fill="toself", name=data2["device_name"],
+            line_color="#378ADD", fillcolor="rgba(55,138,221,0.15)"
+        ))
+        fig_radar.update_layout(
+            polar=dict(
+                radialaxis=dict(
+                    visible=True, range=[0,4],
+                    tickvals=[1,2,3,4],
+                    ticktext=["Low","Med","High","Crit"]
+                )
+            ),
+            showlegend=True,
+            height=380,
+            margin=dict(t=30,b=30),
+            paper_bgcolor="rgba(0,0,0,0)"
+        )
+        st.plotly_chart(fig_radar, use_container_width=True)
+        st.caption("Radar chart shows risk level per framework. Larger area = higher overall regulatory burden.")
     # ── Timeline chart ────────────────────────────────────────────────────────
     st.subheader("Approval timeline comparison")
     labels    = [FRAMEWORKS[fw]["label"] for fw in selected_fws]
@@ -230,6 +401,77 @@ if analyse and device_name.strip():
     c3.warning(f"Slowest: **{sorted_pairs[-1][0]}** — {sorted_pairs[-1][1]} months")
 
     st.divider()
+    def show_world_map(data, selected_fws):
+    # ISO country codes mapped to our frameworks
+    country_map = {
+        "cdsco"         : {"code": "IND", "name": "India"},
+        "fda"           : {"code": "USA", "name": "USA"},
+        "eu"            : {"code": "DEU", "name": "Germany"},  # proxy for EU
+        "health_canada" : {"code": "CAN", "name": "Canada"},
+        "japan"         : {"code": "JPN", "name": "Japan"},
+        "australia"     : {"code": "AUS", "name": "Australia"},
+    }
+
+    countries, timelines, labels, texts = [], [], [], []
+
+    for fw in selected_fws:
+        c = country_map.get(fw)
+        if c:
+            t = int(data[fw].get("timeline_months", 0))
+            countries.append(c["code"])
+            timelines.append(t)
+            labels.append(c["name"])
+            texts.append(
+                f"<b>{c['name']}</b><br>"
+                f"Framework: {FRAMEWORKS[fw]['label']}<br>"
+                f"Risk class: {data[fw].get('risk_class','—')}<br>"
+                f"Timeline: {t} months<br>"
+                f"Pathway: {data[fw].get(pathway_key.get(fw,''),'—')}"
+            )
+
+    fig = go.Figure(go.Choropleth(
+        locations=countries,
+        z=timelines,
+        text=texts,
+        hovertemplate="%{text}<extra></extra>",
+        colorscale=[
+            [0.0,  "#1D9E75"],
+            [0.33, "#BA7517"],
+            [0.66, "#D85A30"],
+            [1.0,  "#E24B4A"]
+        ],
+        colorbar=dict(
+            title=dict(text="Months", font=dict(size=12)),
+            thickness=12,
+            len=0.5
+        ),
+        marker_line_color="white",
+        marker_line_width=0.5,
+    ))
+
+    fig.update_layout(
+        geo=dict(
+            showframe=False,
+            showcoastlines=True,
+            coastlinecolor="#e0e0e0",
+            showland=True,
+            landcolor="#f5f5f5",
+            showocean=True,
+            oceancolor="#eaf4fb",
+            showlakes=False,
+            projection_type="natural earth",
+        ),
+        margin=dict(l=0, r=0, t=10, b=0),
+        height=380,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
+    return fig
+    # ── World map ─────────────────────────────────────────────────────────────
+    st.subheader("Global Market Entry Map")
+    st.caption("Colour = approval timeline. Green = fast, Red = long.")
+    st.plotly_chart(show_world_map(data, selected_fws),
+                    use_container_width=True)
 
     # ── Tabbed framework details ──────────────────────────────────────────────
     st.subheader("Detailed pathway requirements")
@@ -307,6 +549,23 @@ else:
     1. Type any medical device name in the sidebar
     2. Select target markets
     3. Click **Analyse Device**
+# ── PDF download button ───────────────────────────────────────────────────
+    st.divider()
+    st.subheader("Export Report")
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        pdf_bytes = generate_pdf(data, selected_fws)
+        st.download_button(
+            label="Download PDF Report",
+            data=pdf_bytes,
+            file_name=f"{data['device_name'].replace(' ','_')}_regulatory_report.pdf",
+            mime="application/pdf",
+            type="primary",
+            use_container_width=True
+        )
+    with col2:
+        st.caption(f"Includes full pathway analysis for {len(selected_fws)} markets. "
+                   "Generated instantly from AI classification results.")
 
     #### 6 frameworks covered
     | Market | Framework | Classes |
