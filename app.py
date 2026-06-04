@@ -223,37 +223,83 @@ def generate_pdf(data, selected_fws):
 
 # ── World map builder ─────────────────────────────────────────────────────────
 def build_world_map(data, selected_fws):
-    countries, timelines, texts = [], [], []
+    # ISO-3 country codes — must match exactly for choropleth to render
+    COUNTRY_MAP_LOCAL = {
+        "cdsco"         : {"code": "IND", "name": "India"},
+        "fda"           : {"code": "USA", "name": "United States"},
+        "eu"            : {"code": "DEU", "name": "Germany (EU proxy)"},
+        "health_canada" : {"code": "CAN", "name": "Canada"},
+        "japan"         : {"code": "JPN", "name": "Japan"},
+        "australia"     : {"code": "AUS", "name": "Australia"},
+    }
+
+    countries, timelines, texts, hover = [], [], [], []
+
     for fw in selected_fws:
-        c = COUNTRY_MAP.get(fw)
-        if c:
-            t = int(data[fw].get("timeline_months", 0))
-            countries.append(c["code"])
-            timelines.append(t)
-            texts.append(
-                f"<b>{c['name']}</b><br>"
-                f"Framework: {FRAMEWORKS[fw]['label']}<br>"
-                f"Risk class: {data[fw].get('risk_class','—')}<br>"
-                f"Timeline: {t} months"
-            )
+        c = COUNTRY_MAP_LOCAL.get(fw)
+        if not c:
+            continue
+        t = int(data[fw].get("timeline_months", 0))
+        rc = data[fw].get("risk_class", "—")
+        pw = data[fw].get(PATHWAY_KEY.get(fw, ""), "—")
+        countries.append(c["code"])
+        timelines.append(t)
+        hover.append(
+            f"<b>{c['name']}</b><br>"
+            f"Framework: {FRAMEWORKS[fw]['label']}<br>"
+            f"Risk class: {rc}<br>"
+            f"Pathway: {pw}<br>"
+            f"Timeline: <b>{t} months</b>"
+        )
+
+    if not countries:
+        return go.Figure()
+
     fig = go.Figure(go.Choropleth(
-        locations=countries, z=timelines, text=texts,
+        locations=countries,
+        z=timelines,
+        text=hover,
         hovertemplate="%{text}<extra></extra>",
+        locationmode="ISO-3",          # ← critical fix
         colorscale=[
-            [0.0, "#1D9E75"],[0.33,"#BA7517"],
-            [0.66,"#D85A30"],[1.0, "#E24B4A"]
+            [0.0,  "#1D9E75"],
+            [0.35, "#BA7517"],
+            [0.65, "#D85A30"],
+            [1.0,  "#E24B4A"],
         ],
-        colorbar=dict(title=dict(text="Months"),thickness=12,len=0.5),
-        marker_line_color="white", marker_line_width=0.5,
+        zmin=min(timelines),
+        zmax=max(timelines),
+        colorbar=dict(
+            title=dict(text="Months", font=dict(size=11)),
+            thickness=14,
+            len=0.55,
+            x=1.0,
+        ),
+        marker_line_color="white",
+        marker_line_width=0.8,
     ))
+
     fig.update_layout(
-        geo=dict(showframe=False,showcoastlines=True,
-                 coastlinecolor="#e0e0e0",showland=True,
-                 landcolor="#f5f5f5",showocean=True,
-                 oceancolor="#eaf4fb",
-                 projection_type="natural earth"),
-        margin=dict(l=0,r=0,t=10,b=0), height=380,
-        paper_bgcolor="rgba(0,0,0,0)"
+        geo=dict(
+            showframe=False,
+            showcoastlines=True,
+            coastlinecolor="#cccccc",
+            showland=True,
+            landcolor="#f0ede8",        # ← warm neutral land color
+            showocean=True,
+            oceancolor="#ddeef8",       # ← soft blue ocean
+            showlakes=True,
+            lakecolor="#ddeef8",
+            showcountries=True,         # ← show all country borders
+            countrycolor="#dddddd",
+            projection_type="natural earth",
+            lataxis_range=[-60, 85],
+            lonaxis_range=[-170, 180],
+        ),
+        margin=dict(l=0, r=60, t=20, b=0),
+        height=420,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
     )
     return fig
 
@@ -320,7 +366,7 @@ with st.sidebar:
                            mime="text/csv", use_container_width=True)
 
 # ── Header ────────────────────────────────────────────────────────────────────
-st.markdown("##  MedTech Regulatory Pathway Navigator")
+st.markdown("## 🧬 MedTech Regulatory Pathway Navigator")
 st.markdown("*AI-powered classification across 6 global regulatory frameworks*")
 st.divider()
 
