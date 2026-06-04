@@ -140,46 +140,85 @@ Return ONLY the JSON. No text before or after."""
 def generate_pdf(data, selected_fws):
     pdf = FPDF()
     pdf.add_page()
+
+    # Page width = 210mm, margins 15mm each side = 180mm usable
+    PAGE_W = 180
+    LABEL_W = 45
+    VALUE_W = PAGE_W - LABEL_W  # 135mm for value column
+
     pdf.set_margins(15, 15, 15)
-    pdf.set_font("Helvetica", "B", 18)
-    pdf.cell(0, 10, "MedTech Regulatory Pathway Report", ln=True, align="C")
-    pdf.set_font("Helvetica", "", 11)
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(PAGE_W, 10, "MedTech Regulatory Pathway Report", ln=True, align="C")
+    pdf.ln(2)
+    pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 8, f"Device: {data['device_name']}", ln=True, align="C")
-    pdf.cell(0, 8, f"Intended use: {data['intended_use']}", ln=True, align="C")
-    pdf.cell(0, 6, f"AI Confidence: {data.get('confidence','—')}", ln=True, align="C")
-    pdf.ln(6)
+    pdf.cell(PAGE_W, 6, f"Device: {data['device_name']}", ln=True, align="C")
+    pdf.cell(PAGE_W, 6, f"Intended use: {data['intended_use']}", ln=True, align="C")
+    pdf.cell(PAGE_W, 6, f"AI Confidence: {data.get('confidence', '—')}", ln=True, align="C")
+    pdf.ln(4)
     pdf.set_draw_color(200, 200, 200)
     pdf.line(15, pdf.get_y(), 195, pdf.get_y())
-    pdf.ln(6)
+    pdf.ln(5)
+
+    # ── One section per framework ─────────────────────────────────────────────
     for fw in selected_fws:
-        d = data[fw]
-        pdf.set_font("Helvetica", "B", 13)
+        d     = data[fw]
+        label = FRAMEWORKS[fw]["label"]
+
+        # Framework heading
+        pdf.set_font("Helvetica", "B", 12)
         pdf.set_text_color(30, 158, 117)
-        pdf.cell(0, 9, FRAMEWORKS[fw]["label"], ln=True)
+        pdf.cell(PAGE_W, 8, label, ln=True)
         pdf.set_text_color(0, 0, 0)
-        pdf.set_font("Helvetica", "", 10)
+
+        # Rows: label cell (fixed 45mm) + value cell (remaining 135mm)
         fields = [
-            ("Risk class", d.get("risk_class", "—")),
-            ("Pathway",    d.get(PATHWAY_KEY.get(fw, ""), "—")),
-            ("Timeline",   f"{d.get('timeline_months','—')} months"),
-            ("Reasoning",  d.get("reasoning", "—")),
+            ("Risk class",  d.get("risk_class", "—")),
+            ("Pathway",     d.get(PATHWAY_KEY.get(fw, ""), "—")),
+            ("Timeline",    f"{d.get('timeline_months', '—')} months"),
+            ("Reasoning",   d.get("reasoning", "—")),
         ]
-        for lbl, val in fields:
-            pdf.set_font("Helvetica", "B", 10)
-            pdf.cell(45, 7, f"{lbl}:", border=0)
-            pdf.set_font("Helvetica", "", 10)
-            pdf.multi_cell(0, 7, str(val), border=0)
-        pdf.ln(4)
+
+        for row_label, row_value in fields:
+            # Sanitise value — replace any special chars that FPDF Latin-1 can't encode
+            safe_value = str(row_value).encode("latin-1", errors="replace").decode("latin-1")
+            safe_label = str(row_label).encode("latin-1", errors="replace").decode("latin-1")
+
+            # Measure how many lines the value needs at VALUE_W
+            pdf.set_font("Helvetica", "", 9)
+            # Use get_string_width to estimate; multi_cell handles wrapping
+            line_height = 6
+
+            # Save Y before writing the row
+            x_start = pdf.get_x()
+            y_start = pdf.get_y()
+
+            # Write label in fixed-width cell (no wrap needed — short labels)
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.cell(LABEL_W, line_height, f"{safe_label}:", border=0, ln=0)
+
+            # Write value — multi_cell wraps automatically within VALUE_W
+            pdf.set_font("Helvetica", "", 9)
+            pdf.multi_cell(VALUE_W, line_height, safe_value, border=0)
+
+            # Ensure next row starts at correct X after multi_cell resets it
+            pdf.set_x(15)
+
+        pdf.ln(3)
         pdf.set_draw_color(220, 220, 220)
         pdf.line(15, pdf.get_y(), 195, pdf.get_y())
         pdf.ln(4)
+
+    # ── Footer ────────────────────────────────────────────────────────────────
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(150, 150, 150)
-    pdf.cell(0, 6,
+    pdf.multi_cell(PAGE_W, 5,
         "Disclaimer: For educational and scoping purposes only. "
         "Verify with a qualified regulatory affairs professional.",
-        ln=True, align="C")
+        align="C")
     return bytes(pdf.output())
 
 # ── World map builder ─────────────────────────────────────────────────────────
