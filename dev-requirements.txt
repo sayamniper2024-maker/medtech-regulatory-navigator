@@ -1,0 +1,4 @@
+pytest
+requests
+pytest-playwright
+playwright
