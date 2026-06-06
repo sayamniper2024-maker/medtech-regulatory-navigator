@@ -11,12 +11,19 @@ st.set_page_config(page_title="MedTech Regulatory Navigator", page_icon="🧬", 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 client = Groq(api_key=GROQ_API_KEY)
 
-if "classify_cache"  not in st.session_state: st.session_state.classify_cache  = {}
-if "search_history"  not in st.session_state: st.session_state.search_history  = []
-if "chat_history"    not in st.session_state: st.session_state.chat_history    = []
-if "current_device"  not in st.session_state: st.session_state.current_device  = None
-if "pending_q"       not in st.session_state: st.session_state.pending_q       = None
+# ── Session state ─────────────────────────────────────────────────────────────
+for key, default in {
+    "classify_cache"  : {},
+    "search_history"  : [],
+    "chat_history"    : [],
+    "current_device"  : None,
+    "chat_input_text" : "",
+    "chat_submitted"  : False,
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
 
+# ── Constants ─────────────────────────────────────────────────────────────────
 FRAMEWORKS = {
     "cdsco"         : {"label":"CDSCO (India)",    "color":"#1D9E75"},
     "fda"           : {"label":"FDA (USA)",         "color":"#378ADD"},
@@ -76,29 +83,25 @@ FW_FIELDS = {
 }
 
 RULE_EXCEPTIONS = """
-=== CRITICAL CLASSIFICATION EXCEPTIONS ===
-CHECK THESE FIRST before applying any general rules.
+=== CRITICAL CLASSIFICATION EXCEPTIONS — CHECK FIRST ===
 
-EU MDR 2017/745 Annex VIII Rule 8 escalations to Class III:
+EU MDR 2017/745 Annex VIII Rule 8 → Class III (NOT IIb):
 - Coronary stents, cardiac stents, drug-eluting stents → Class III
-- Intravascular stents contacting central circulatory system → Class III
-- Total knee replacement, total hip replacement → Class III
+- Any implantable device contacting heart or central circulatory system → Class III
+- Total knee replacement (TKR), total hip replacement (THR) → Class III
 - All joint replacement implants → Class III
-- Spinal disc replacements → Class III
-- Pacemakers, ICDs, CRT → Class III (Rule 7 active implantable)
+- Pacemakers, ICDs → Class III (Rule 7)
 - LVAD, mechanical heart valves → Class III
-- Cochlear implants, deep brain stimulators → Class III
 
-FDA 21 CFR — correct CFR parts:
-- Cardiovascular devices → 21 CFR Part 870 (NOT Part 882)
+FDA 21 CFR — cardiovascular = Part 870, orthopaedic = Part 888:
 - Coronary stents → Class III, PMA, 21 CFR 870.3945
 - Joint replacements → Class III, PMA, 21 CFR 888.3400/888.3320
-- Pacemakers → Class III, PMA, 21 CFR 870.3610
+- NEVER cite Part 882 (neurology) for cardiac/vascular devices
 
-CDSCO: Cardiac implants and joint replacements → Class D
-Health Canada: Cardiac implants and joint replacements → Class IV
-Japan: Cardiac implants and joint replacements → Class IV, Approval, DMAH required
-Australia: Cardiac implants and joint replacements → Class III
+CDSCO: cardiac implants + joint replacements → Class D
+Health Canada: cardiac implants + joint replacements → Class IV
+Japan: cardiac implants + joint replacements → Class IV, Approval, DMAH required
+Australia: cardiac implants + joint replacements → Class III
 """
 
 KNOWN_CORRECTIONS = [
@@ -125,7 +128,7 @@ KNOWN_CORRECTIONS = [
             "australia":{"risk_class":"III","artg_pathway":"Conformity assessment",
                          "rule_applied":"TGA Schedule 2","timeline_months":20},
         },
-        "note":"Coronary stents contact central circulatory system — "
+        "note":"Coronary/cardiac stents contact the central circulatory system — "
                "escalated to highest class per EU MDR Annex VIII Rule 8."
     },
     {
@@ -155,21 +158,21 @@ KNOWN_CORRECTIONS = [
 ]
 
 def validate_and_correct(result):
-    device_lower     = result.get("device_name","").lower()
+    device_lower = result.get("device_name","").lower()
     corrections_made = []
     for rule in KNOWN_CORRECTIONS:
         if not any(kw in device_lower for kw in rule["keywords"]):
             continue
-        for fw,overrides in rule["corrections"].items():
+        for fw, overrides in rule["corrections"].items():
             if fw not in result: continue
             fw_fixes = []
-            for field,correct_val in overrides.items():
+            for field, correct_val in overrides.items():
                 if str(result[fw].get(field,"")) != str(correct_val):
                     result[fw][field] = correct_val
                     fw_fixes.append(field)
             if fw_fixes:
                 corrections_made.append(
-                    f"**{FRAMEWORKS[fw]['label']}**: corrected {', '.join(fw_fixes)}"
+                    f"**{FRAMEWORKS[fw]['label']}**: corrected {chr(44).join(fw_fixes)}"
                 )
         if corrections_made:
             result["_correction_note"] = rule["note"]
@@ -178,6 +181,7 @@ def validate_and_correct(result):
         break
     return result
 
+# ── AI classifier ─────────────────────────────────────────────────────────────
 def ai_classify_device(device_name, device_description=""):
     cache_key = f"{device_name.lower().strip()}|{device_description.lower().strip()}"
     if cache_key in st.session_state.classify_cache:
@@ -190,25 +194,30 @@ Device: {device_name}
 Return exactly this JSON:
 {{
   "device_name":"{device_name}","intended_use":"one line intended use",
-  "cdsco":{{"risk_class":"A/B/C/D","license_type":"MD-5/MD-9/MD-14","timeline_months":0,
-    "qms_required":"Yes/No","clinical_data_required":"Yes/No",
-    "reasoning":"cite MDR 2017 rule","rule_applied":"e.g. Schedule 1 Rule 4"}},
-  "fda":{{"risk_class":"I/II/III","pathway":"Exempt/510(k)/PMA","predicate_needed":"Yes/No",
-    "timeline_months":0,"clinical_trials_required":"Yes/No","ide_required":"Yes/No",
-    "reasoning":"cite correct 21 CFR part","rule_applied":"e.g. 21 CFR 870.3945"}},
-  "eu":{{"risk_class":"I/IIa/IIb/III","notified_body_needed":"Yes/No","timeline_months":0,
-    "technical_file_type":"Basic UDI-DI/Full Tech File","clinical_evaluation_required":"Yes/No",
-    "pmcf_required":"Yes/No","reasoning":"cite Annex VIII rule","rule_applied":"e.g. Rule 8"}},
+  "cdsco":{{"risk_class":"A/B/C/D","license_type":"MD-5/MD-9/MD-14",
+    "timeline_months":0,"qms_required":"Yes/No","clinical_data_required":"Yes/No",
+    "reasoning":"cite MDR 2017 rule","rule_applied":"Schedule rule"}},
+  "fda":{{"risk_class":"I/II/III","pathway":"Exempt/510(k)/PMA",
+    "predicate_needed":"Yes/No","timeline_months":0,
+    "clinical_trials_required":"Yes/No","ide_required":"Yes/No",
+    "reasoning":"cite correct 21 CFR part","rule_applied":"21 CFR section"}},
+  "eu":{{"risk_class":"I/IIa/IIb/III","notified_body_needed":"Yes/No",
+    "timeline_months":0,"technical_file_type":"Basic UDI-DI/Full Tech File",
+    "clinical_evaluation_required":"Yes/No","pmcf_required":"Yes/No",
+    "reasoning":"cite Annex VIII rule","rule_applied":"Rule number"}},
   "health_canada":{{"risk_class":"I/II/III/IV","licence_type":"MDEL only/Device Licence",
     "timeline_months":0,"qms_required":"Yes/No","clinical_data_required":"Yes/No",
-    "hpfb_review":"Yes/No","reasoning":"cite SOR/98-282","rule_applied":"SOR/98-282"}},
-  "japan":{{"risk_class":"I/II/III/IV","approval_type":"Notification/Certification/Approval",
+    "hpfb_review":"Yes/No","reasoning":"cite SOR/98-282","rule_applied":"SOR rule"}},
+  "japan":{{"risk_class":"I/II/III/IV",
+    "approval_type":"Notification/Certification/Approval",
     "dmah_required":"Yes","timeline_months":0,"clinical_trial_required":"Yes/No",
     "jis_standard_required":"Yes/No","reasoning":"cite PMD Act","rule_applied":"PMD Act"}},
-  "australia":{{"risk_class":"I/IIa/IIb/III/AIMD","artg_pathway":"Self-assessment/Conformity assessment",
-    "timeline_months":0,"audited_qms_required":"Yes/No","clinical_evidence_required":"Yes/No",
+  "australia":{{"risk_class":"I/IIa/IIb/III/AIMD",
+    "artg_pathway":"Self-assessment/Conformity assessment",
+    "timeline_months":0,"audited_qms_required":"Yes/No",
+    "clinical_evidence_required":"Yes/No",
     "conformity_assessment_body":"None/TGA/TGA or Notified Body",
-    "reasoning":"cite TGA rule","rule_applied":"TGA Schedule 2"}},
+    "reasoning":"cite TGA rule","rule_applied":"TGA rule"}},
   "confidence":"High/Medium/Low","disclaimer":""
 }}"""
     response = client.chat.completions.create(
@@ -225,62 +234,45 @@ Return exactly this JSON:
     st.session_state.classify_cache[cache_key] = result
     return result
 
-# ── CHATBOT — fixed with explicit state management ────────────────────────────
-def regulatory_chat(user_question, device_data):
-    """
-    Sends question + full device context to Groq.
-    Returns answer string. Never returns empty.
-    """
+# ── Chatbot function ──────────────────────────────────────────────────────────
+def regulatory_chat(question, device_data):
     context_lines = [
-        f"Device being analysed: {device_data.get('device_name','Unknown')}",
+        f"Device: {device_data.get('device_name','Unknown')}",
         f"Intended use: {device_data.get('intended_use','—')}",
-        "",
-        "Current classification results:",
+        "Classification results:"
     ]
     for fw in ["cdsco","fda","eu","health_canada","japan","australia"]:
-        d = device_data.get(fw, {})
+        d = device_data.get(fw,{})
         context_lines.append(
-            f"  {FRAMEWORKS[fw]['label']}: "
-            f"Class {d.get('risk_class','—')} | "
+            f"  {FRAMEWORKS[fw]['label']}: Class {d.get('risk_class','—')} | "
             f"Pathway {d.get(PATHWAY_KEY.get(fw,''),'—')} | "
             f"{d.get('timeline_months','—')} months | "
             f"Rule: {d.get('rule_applied','—')}"
         )
-    device_context = "\n".join(context_lines)
-
     system_msg = (
-        "You are a senior regulatory affairs expert specialising in global "
-        "medical device regulations. You have deep knowledge of CDSCO MDR 2017, "
-        "FDA 21 CFR, EU MDR 2017/745, Health Canada SOR/98-282, Japan PMD Act, "
-        "Australia TGA, ISO 13485, ISO 14971, IEC 62304, clinical evaluation, "
-        "PMCF, and post-market surveillance.\n\n"
-        f"Here is the device classification context for this session:\n{device_context}\n\n"
-        "Answer the user question accurately and concisely. "
-        "Always cite the specific regulatory rule or article number when relevant. "
-        "If the question is not about regulatory affairs, politely redirect. "
-        "Keep answers under 250 words unless a detailed step-by-step is needed."
+        "You are a senior regulatory affairs expert for global medical devices. "
+        "You have deep knowledge of CDSCO MDR 2017, FDA 21 CFR, EU MDR 2017/745, "
+        "Health Canada SOR/98-282, Japan PMD Act, Australia TGA, "
+        "ISO 13485, ISO 14971, IEC 62304.\n\n"
+        "Device context:\n" + "\n".join(context_lines) + "\n\n"
+        "Answer accurately and concisely. Always cite specific regulatory rules. "
+        "Keep answers under 300 words unless a step-by-step is needed."
     )
-
-    # Build message list — system + last 3 exchanges + new question
     messages = [{"role":"system","content":system_msg}]
     for turn in st.session_state.chat_history[-6:]:
-        messages.append({"role":"user",      "content":turn["question"]})
-        messages.append({"role":"assistant", "content":turn["answer"]})
-    messages.append({"role":"user","content":user_question})
-
+        messages.append({"role":"user","content":turn["question"]})
+        messages.append({"role":"assistant","content":turn["answer"]})
+    messages.append({"role":"user","content":question})
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=messages,
         temperature=0.2,
-        max_tokens=600,
+        max_tokens=700,
     )
-    answer = response.choices[0].message.content.strip()
-    if not answer:
-        answer = "I could not generate a response. Please try rephrasing your question."
-    return answer
+    return response.choices[0].message.content.strip()
 
-# ── World map — interactive globe with drag enabled ───────────────────────────
-def build_world_map(data, selected_fws, map_key="map"):
+# ── World map ─────────────────────────────────────────────────────────────────
+def build_world_map(data, selected_fws, prefix=""):
     countries, timelines, hover = [], [], []
     for fw in selected_fws:
         c = COUNTRY_MAP.get(fw)
@@ -299,52 +291,46 @@ def build_world_map(data, selected_fws, map_key="map"):
         )
     if not countries:
         return None
-
     fig = go.Figure(go.Choropleth(
-        locations=countries,
-        z=timelines,
-        text=hover,
+        locations=countries, z=timelines, text=hover,
         hovertemplate="%{text}<extra></extra>",
         locationmode="ISO-3",
         colorscale=[
-            [0.0, "#1D9E75"],[0.35,"#BA7517"],
-            [0.65,"#D85A30"],[1.0, "#E24B4A"],
+            [0.0,"#1D9E75"],[0.35,"#BA7517"],
+            [0.65,"#D85A30"],[1.0,"#E24B4A"]
         ],
-        zmin=min(timelines),
-        zmax=max(timelines),
+        zmin=min(timelines), zmax=max(timelines),
         colorbar=dict(
-            title=dict(text="Months",font=dict(size=11)),
-            thickness=14,len=0.55,x=1.01
+            title=dict(text="Months to approval",font=dict(size=11)),
+            thickness=15, len=0.6, x=1.0,
         ),
-        marker_line_color="white",
-        marker_line_width=0.8,
+        marker_line_color="white", marker_line_width=0.8,
     ))
-
-    # ── Key fix: use orthographic projection + dragmode enabled ──────────────
     fig.update_layout(
         geo=dict(
             showframe=False,
             showcoastlines=True,
-            coastlinecolor="#aaaaaa",
+            coastlinecolor="#bbbbbb",
             showland=True,
-            landcolor="#f0ede8",
+            landcolor="#f5f3ef",
             showocean=True,
-            oceancolor="#cce5f5",
+            oceancolor="#d0e8f5",
             showlakes=True,
-            lakecolor="#cce5f5",
+            lakecolor="#d0e8f5",
             showcountries=True,
             countrycolor="#cccccc",
-            projection_type="orthographic",   # ← globe not flat map
-            lataxis_range=[-90,90],
-            lonaxis_range=[-180,180],
+            projection_type="natural earth",
             bgcolor="rgba(0,0,0,0)",
         ),
-        margin=dict(l=0,r=80,t=10,b=10),
-        height=480,
+        margin=dict(l=0,r=90,t=20,b=10),
+        height=440,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        dragmode="orbit",                      # ← allows globe rotation
-        uirevision=map_key,                    # ← preserves user rotation
+        dragmode="pan",
+    )
+    fig.update_traces(
+        selector=dict(type="choropleth"),
+        showscale=True,
     )
     return fig
 
@@ -354,7 +340,7 @@ def show_device_results(data, selected_fws, prefix=""):
     conf_colors = {"High":"green","Medium":"orange","Low":"red"}
     disclaimer  = data.get("disclaimer","").strip() or (
         "AI-generated classification. Always verify with a qualified "
-        "regulatory affairs professional before use in actual submissions."
+        "regulatory affairs professional before actual submissions."
     )
     st.info(f"**{data['device_name']}** — {data['intended_use']}")
     st.markdown(
@@ -364,11 +350,11 @@ def show_device_results(data, selected_fws, prefix=""):
     if data.get("_corrections"):
         with st.expander("⚠️ Classification corrections applied", expanded=True):
             st.warning(data.get("_correction_note",""))
-            st.markdown("**Fields corrected by rule validator:**")
             for c in data["_corrections"]:
                 st.markdown(f"- {c}")
     st.divider()
 
+    # Risk grid
     st.subheader("Risk classification")
     risk_cols = st.columns(len(selected_fws))
     for i,fw in enumerate(selected_fws):
@@ -385,44 +371,59 @@ def show_device_results(data, selected_fws, prefix=""):
             st.caption(data[fw].get("reasoning",""))
     st.divider()
 
+    # Timeline
     st.subheader("Approval timeline comparison")
     b_labels    = [FRAMEWORKS[fw]["label"] for fw in selected_fws]
     b_timelines = [int(data[fw].get("timeline_months",0)) for fw in selected_fws]
     b_colors    = [FRAMEWORKS[fw]["color"] for fw in selected_fws]
     fig_bar = go.Figure(go.Bar(
-        x=b_labels,y=b_timelines,marker_color=b_colors,
-        text=[f"{t} mo" for t in b_timelines],textposition="outside"
+        x=b_labels, y=b_timelines, marker_color=b_colors,
+        text=[f"{t} mo" for t in b_timelines], textposition="outside"
     ))
     avg = sum(b_timelines)/len(b_timelines) if b_timelines else 0
-    fig_bar.add_hline(y=avg,line_dash="dot",line_color="#888",
+    fig_bar.add_hline(y=avg, line_dash="dot", line_color="#888",
                       annotation_text=f"Avg {avg:.0f} mo",
                       annotation_position="top right")
     fig_bar.update_layout(
-        yaxis_title="Months to approval",plot_bgcolor="white",
-        height=360,margin=dict(t=30,b=20),
+        yaxis_title="Months to approval", plot_bgcolor="white",
+        height=360, margin=dict(t=30,b=20),
         yaxis=dict(gridcolor="#f0f0f0")
     )
-    st.plotly_chart(fig_bar,use_container_width=True,key=f"bar_{prefix}")
-    sp = sorted(zip(b_labels,b_timelines),key=lambda x:x[1])
+    st.plotly_chart(fig_bar, use_container_width=True, key=f"bar_{prefix}")
+    sp = sorted(zip(b_labels,b_timelines), key=lambda x:x[1])
     sc1,sc2,sc3 = st.columns(3)
     sc1.success(f"Fastest: **{sp[0][0]}** — {sp[0][1]} months")
     sc2.info(   f"Median: **{sp[len(sp)//2][0]}**")
     sc3.warning(f"Slowest: **{sp[-1][0]}** — {sp[-1][1]} months")
     st.divider()
 
+    # Map
     st.subheader("Global market entry map")
-    st.caption("🌍 Drag to rotate the globe. Hover over highlighted countries "
-               "for full pathway details. Green = fast · Red = long.")
-    fig_map = build_world_map(data,selected_fws,map_key=f"map_{prefix}")
+    st.caption(
+        "Countries highlighted by approval timeline. "
+        "Green = faster entry · Red = longer. "
+        "Hover over a country for full details."
+    )
+    fig_map = build_world_map(data, selected_fws, prefix=prefix)
     if fig_map:
-        st.plotly_chart(fig_map,use_container_width=True,key=f"map_{prefix}")
+        st.plotly_chart(
+            fig_map, use_container_width=True,
+            key=f"map_{prefix}",
+            config={
+                "scrollZoom"      : True,
+                "displayModeBar"  : True,
+                "modeBarButtonsToAdd" : ["pan2d","zoomIn2d","zoomOut2d"],
+                "displaylogo"     : False,
+            }
+        )
     else:
         st.info("Select at least one market to show the map.")
     st.divider()
 
+    # Tabs
     st.subheader("Detailed pathway requirements")
     detail_tabs = st.tabs([FRAMEWORKS[fw]["label"] for fw in selected_fws])
-    for tab,fw in zip(detail_tabs,selected_fws):
+    for tab,fw in zip(detail_tabs, selected_fws):
         with tab:
             dc1,dc2 = st.columns(2)
             with dc1:
@@ -445,9 +446,11 @@ def show_device_results(data, selected_fws, prefix=""):
                     unsafe_allow_html=True)
     st.divider()
 
+    # Summary table
     st.subheader("Side-by-side summary")
-    summary = {"Parameter":["Risk class","Pathway / Licence","Timeline (months)",
-                             "QMS required","Clinical data","Rule applied"]}
+    summary = {"Parameter":["Risk class","Pathway / Licence",
+                             "Timeline (months)","QMS required",
+                             "Clinical data","Rule applied"]}
     for fw in selected_fws:
         summary[FRAMEWORKS[fw]["label"]] = [
             data[fw].get("risk_class","—"),
@@ -457,7 +460,7 @@ def show_device_results(data, selected_fws, prefix=""):
             data[fw].get(CLIN_KEY[fw],"—"),
             data[fw].get("rule_applied","—"),
         ]
-    st.dataframe(pd.DataFrame(summary),use_container_width=True,hide_index=True)
+    st.dataframe(pd.DataFrame(summary), use_container_width=True, hide_index=True)
 
 # ── PDF generator ─────────────────────────────────────────────────────────────
 def generate_pdf(data, selected_fws, data2=None, selected_fws2=None):
@@ -468,11 +471,13 @@ def generate_pdf(data, selected_fws, data2=None, selected_fws2=None):
         pdf.set_font("Helvetica","B",13); pdf.set_text_color(*color)
         pdf.cell(PAGE_W,9,safe(title),ln=True); pdf.set_text_color(0,0,0)
     def fr(label,value):
-        pdf.set_font("Helvetica","B",9); pdf.cell(LABEL_W,6,safe(f"{label}:"),border=0,ln=0)
-        pdf.set_font("Helvetica","",9); pdf.multi_cell(VALUE_W,6,safe(str(value)),border=0)
-        pdf.set_x(15)
+        pdf.set_font("Helvetica","B",9)
+        pdf.cell(LABEL_W,6,safe(f"{label}:"),border=0,ln=0)
+        pdf.set_font("Helvetica","",9)
+        pdf.multi_cell(VALUE_W,6,safe(str(value)),border=0); pdf.set_x(15)
     def dv():
-        pdf.set_draw_color(220,220,220); pdf.line(15,pdf.get_y(),195,pdf.get_y()); pdf.ln(4)
+        pdf.set_draw_color(220,220,220)
+        pdf.line(15,pdf.get_y(),195,pdf.get_y()); pdf.ln(4)
     def write_section(d,fws,label=""):
         pdf.set_font("Helvetica","B",11); pdf.set_text_color(60,60,60)
         if label: pdf.cell(PAGE_W,7,safe(label),ln=True)
@@ -500,16 +505,17 @@ def generate_pdf(data, selected_fws, data2=None, selected_fws2=None):
             pdf.cell(cw,6,safe(str(rl)[:22]),border=1,ln=True)
         pdf.ln(4); dv()
         sh("Approval Timeline Summary"); pdf.set_font("Helvetica","B",9)
-        hw=PAGE_W//2; pdf.cell(hw,6,"Framework",border=1,ln=0)
+        hw=PAGE_W//2
+        pdf.cell(hw,6,"Framework",border=1,ln=0)
         pdf.cell(hw,6,"Timeline",border=1,ln=True)
         pdf.set_font("Helvetica","",9); all_t=[]
         for fw in fws:
-            t=int(d[fw].get("timeline_months",0)); all_t.append((FRAMEWORKS[fw]["label"],t))
+            t=int(d[fw].get("timeline_months",0))
+            all_t.append((FRAMEWORKS[fw]["label"],t))
             pdf.cell(hw,6,safe(FRAMEWORKS[fw]["label"]),border=1,ln=0)
             pdf.cell(hw,6,safe(f"{t} months"),border=1,ln=True)
         fast=min(all_t,key=lambda x:x[1]); slow=max(all_t,key=lambda x:x[1])
-        pdf.set_font("Helvetica","I",8)
-        pdf.set_text_color(30,158,117)
+        pdf.set_font("Helvetica","I",8); pdf.set_text_color(30,158,117)
         pdf.cell(PAGE_W,5,safe(f"Fastest: {fast[0]} — {fast[1]} months"),ln=True)
         pdf.set_text_color(200,80,40)
         pdf.cell(PAGE_W,5,safe(f"Slowest: {slow[0]} — {slow[1]} months"),ln=True)
@@ -529,24 +535,26 @@ def generate_pdf(data, selected_fws, data2=None, selected_fws2=None):
             fr("Reasoning",dd.get("reasoning","—"))
             pdf.ln(3); pdf.set_draw_color(230,230,230)
             pdf.line(15,pdf.get_y(),195,pdf.get_y()); pdf.ln(3)
-        dv(); sh("Side-by-Side Summary"); cw2=PAGE_W//(len(fws)+1)
-        pdf.set_font("Helvetica","B",8)
+        dv(); sh("Side-by-Side Summary")
+        cw2=PAGE_W//(len(fws)+1); pdf.set_font("Helvetica","B",8)
         pdf.cell(cw2,6,"Parameter",border=1,ln=0)
-        for fw in fws: pdf.cell(cw2,6,safe(FRAMEWORKS[fw]["label"][:12]),border=1,ln=0)
+        for fw in fws:
+            pdf.cell(cw2,6,safe(FRAMEWORKS[fw]["label"][:12]),border=1,ln=0)
         pdf.ln(); pdf.set_font("Helvetica","",8)
         for rl,fn in [
             ("Risk class",  lambda fw:d[fw].get("risk_class","—")),
             ("Rule",        lambda fw:d[fw].get("rule_applied","—")),
             ("Pathway",     lambda fw:d[fw].get(PATHWAY_KEY.get(fw,""),"—")),
             ("Timeline",    lambda fw:f"{d[fw].get('timeline_months','—')} mo"),
-            ("QMS",         lambda fw:d[fw].get("qms_required",d[fw].get("audited_qms_required","—"))),
+            ("QMS",         lambda fw:d[fw].get("qms_required",
+                            d[fw].get("audited_qms_required","—"))),
             ("Clinical",    lambda fw:d[fw].get(CLIN_KEY[fw],"—")),
         ]:
             pdf.cell(cw2,6,safe(rl),border=1,ln=0)
-            for fw in fws: pdf.cell(cw2,6,safe(str(fn(fw))[:14]),border=1,ln=0)
+            for fw in fws:
+                pdf.cell(cw2,6,safe(str(fn(fw))[:14]),border=1,ln=0)
             pdf.ln()
         pdf.ln(4)
-
     pdf.add_page()
     pdf.set_font("Helvetica","B",18)
     pdf.cell(PAGE_W,12,"MedTech Regulatory Pathway Report",ln=True,align="C")
@@ -568,7 +576,7 @@ def generate_pdf(data, selected_fws, data2=None, selected_fws2=None):
         "DISCLAIMER: For educational and preliminary scoping only. "
         "AI-generated based on CDSCO MDR 2017 | FDA 21 CFR | EU MDR 2017/745 | "
         "Health Canada SOR/98-282 | Japan PMD Act | Australia TGO 2002. "
-        "Always verify with a qualified regulatory affairs professional.",align="C")
+        "Verify with a qualified regulatory affairs professional.",align="C")
     return bytes(pdf.output())
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -587,7 +595,8 @@ with st.sidebar:
     if input_mode == "Type any device name":
         device_name  = st.text_input("Device name",placeholder="e.g. Coronary Stent")
         device_desc  = st.text_area("Description (optional)",height=60)
-        device_name2 = st.text_input("Device 2",placeholder="e.g. Drug-Eluting Stent")                         if compare_mode else ""
+        device_name2 = st.text_input("Device 2",
+                                     placeholder="e.g. Drug-Eluting Stent")                         if compare_mode else ""
         device_desc2 = st.text_area("Description 2 (optional)",height=60)                         if compare_mode else ""
     else:
         device_name  = st.selectbox("Device 1",presets)
@@ -614,11 +623,11 @@ with st.sidebar:
                 f"{h['device']} · {h['cdsco_class']}/{h['fda_class']}/{h['eu_class']}",
                 key=f"hist_{i}",use_container_width=True
             ):
-                st.session_state["reload_data"] = h["data"]; st.rerun()
+                st.session_state["reload_data"]=h["data"]; st.rerun()
         hist_df   = pd.DataFrame([{k:v for k,v in h.items() if k!="data"}
                                    for h in st.session_state.search_history])
         csv_bytes = hist_df.to_csv(index=False).encode("utf-8")
-        st.download_button("Export history CSV",data=csv_bytes,
+        st.download_button("Export CSV",data=csv_bytes,
                            file_name="regulatory_history.csv",
                            mime="text/csv",use_container_width=True)
 
@@ -632,14 +641,18 @@ if "reload_data" in st.session_state:
     data=st.session_state.pop("reload_data"); data2=None; analyse_show=True
 elif analyse and device_name.strip():
     analyse_show=True
-    with st.spinner(f"Classifying **{device_name}** across 6 frameworks..."):
-        try: data=ai_classify_device(device_name.strip(),device_desc.strip())
-        except Exception as e: st.error(f"Classification failed: {e}"); st.stop()
+    with st.spinner(f"Classifying **{device_name}**..."):
+        try:
+            data=ai_classify_device(device_name.strip(),device_desc.strip())
+        except Exception as e:
+            st.error(f"Classification failed: {e}"); st.stop()
     data2=None
     if compare_mode and device_name2.strip():
         with st.spinner(f"Classifying **{device_name2}**..."):
-            try: data2=ai_classify_device(device_name2.strip(),device_desc2.strip())
-            except Exception as e: st.error(f"Device 2 failed: {e}"); data2=None
+            try:
+                data2=ai_classify_device(device_name2.strip(),device_desc2.strip())
+            except Exception as e:
+                st.error(f"Device 2 failed: {e}"); data2=None
     st.session_state.chat_history=[]
     st.session_state.current_device=data
     st.session_state.search_history.append({
@@ -677,11 +690,13 @@ if analyse_show and data:
             vals2=[risk_score.get(RISK_LEVEL.get(data2[fw].get("risk_class",""),"Unknown"),0)
                    for fw in selected_fws]
             fig_r=go.Figure()
-            fig_r.add_trace(go.Scatterpolar(r=vals1+[vals1[0]],theta=cat_closed,
-                fill="toself",name=data["device_name"],line_color="#1D9E75",
+            fig_r.add_trace(go.Scatterpolar(
+                r=vals1+[vals1[0]],theta=cat_closed,fill="toself",
+                name=data["device_name"],line_color="#1D9E75",
                 fillcolor="rgba(29,158,117,0.2)"))
-            fig_r.add_trace(go.Scatterpolar(r=vals2+[vals2[0]],theta=cat_closed,
-                fill="toself",name=data2["device_name"],line_color="#378ADD",
+            fig_r.add_trace(go.Scatterpolar(
+                r=vals2+[vals2[0]],theta=cat_closed,fill="toself",
+                name=data2["device_name"],line_color="#378ADD",
                 fillcolor="rgba(55,138,221,0.2)"))
             fig_r.update_layout(
                 polar=dict(radialaxis=dict(visible=True,range=[0,4],
@@ -707,9 +722,9 @@ if analyse_show and data:
         ex1,ex2=st.columns([1,3])
         with ex1:
             pdf_bytes=generate_pdf(data,selected_fws,data2,selected_fws)
-            st.download_button("Download comparison PDF",data=pdf_bytes,
-                file_name=f"comparison_{data['device_name'].replace(' ','_')}_vs_"
-                          f"{data2['device_name'].replace(' ','_')}.pdf",
+            st.download_button(
+                "Download comparison PDF",data=pdf_bytes,
+                file_name=f"comparison.pdf",
                 mime="application/pdf",type="primary",use_container_width=True)
         with ex2:
             st.caption("Full comparison — both devices, all frameworks, all details.")
@@ -718,22 +733,24 @@ if analyse_show and data:
         ex1,ex2=st.columns([1,3])
         with ex1:
             pdf_bytes=generate_pdf(data,selected_fws)
-            st.download_button("Download PDF",data=pdf_bytes,
-                file_name=f"{data['device_name'].replace(' ','_')}_regulatory_report.pdf",
+            st.download_button(
+                "Download PDF",data=pdf_bytes,
+                file_name=f"{data['device_name'].replace(' ','_')}_report.pdf",
                 mime="application/pdf",type="primary",use_container_width=True)
         with ex2:
             st.caption(f"Full pathway — {len(selected_fws)} markets, all details.")
 
     st.divider()
 
-    # ── CHATBOT — completely rewritten with correct state management ──────────
+    # ── CHATBOT — rebuilt with form-based input (no st.chat_input conflict) ───
     st.subheader("💬 Ask the regulatory AI")
     st.caption(
-        f"Context-aware Q&A about **{data['device_name']}**. "
-        "Ask any follow-up regulatory question."
+        f"Ask any follow-up question about **{data['device_name']}**. "
+        "The AI has full context of the classification results above."
     )
 
-    # 6 quick-question buttons — store in session state, process below
+    # Quick-question buttons using a form to avoid rerun conflicts
+    st.markdown("**Quick questions:**")
     suggestions = [
         "What documents do I need to prepare first?",
         "Which market should I enter first and why?",
@@ -742,65 +759,65 @@ if analyse_show and data:
         "What ISO standards apply to this device?",
         "Walk me through the submission process for the fastest market",
     ]
-    st.markdown("**Quick questions — click to ask:**")
-    q_cols = st.columns(3)
+    q_col1,q_col2,q_col3 = st.columns(3)
+    q_cols = [q_col1,q_col2,q_col3]
     for idx,sug in enumerate(suggestions):
-        if q_cols[idx%3].button(sug, key=f"qbtn_{idx}", use_container_width=True):
-            st.session_state.pending_q = sug
-            st.rerun()  # ← rerun so the question is processed cleanly below
+        if q_cols[idx%3].button(
+            sug, key=f"qbtn_{idx}",
+            use_container_width=True,
+            type="secondary"
+        ):
+            # Process question immediately — no pending state needed
+            if st.session_state.current_device:
+                with st.spinner("Thinking..."):
+                    try:
+                        ans = regulatory_chat(sug, st.session_state.current_device)
+                        st.session_state.chat_history.append(
+                            {"question":sug,"answer":ans}
+                        )
+                    except Exception as e:
+                        st.session_state.chat_history.append(
+                            {"question":sug,"answer":f"Error: {e}"}
+                        )
 
-    # Text input
-    typed_q = st.chat_input(
-        "Or type your own regulatory question here...",
-        key="chat_input_main"
-    )
+    # Text form — using st.form avoids rerun-on-type conflicts entirely
+    st.markdown("**Or type your own question:**")
+    with st.form(key="chat_form", clear_on_submit=True):
+        user_q = st.text_input(
+            "Your question",
+            placeholder="e.g. What is the first document I need for FDA submission?",
+            label_visibility="collapsed"
+        )
+        submitted = st.form_submit_button("Ask", use_container_width=False)
 
-    # Process pending question (from button click via rerun)
-    if st.session_state.pending_q:
-        q_to_process = st.session_state.pending_q
-        st.session_state.pending_q = None
+    if submitted and user_q.strip() and st.session_state.current_device:
         with st.spinner("Consulting regulatory knowledge base..."):
             try:
-                answer = regulatory_chat(q_to_process, st.session_state.current_device)
-                st.session_state.chat_history.append({
-                    "question": q_to_process,
-                    "answer":   answer
-                })
+                ans = regulatory_chat(user_q.strip(), st.session_state.current_device)
+                st.session_state.chat_history.append(
+                    {"question":user_q.strip(),"answer":ans}
+                )
             except Exception as e:
-                st.session_state.chat_history.append({
-                    "question": q_to_process,
-                    "answer":   f"Error: {e}"
-                })
+                st.session_state.chat_history.append(
+                    {"question":user_q.strip(),"answer":f"Error: {e}"}
+                )
 
-    # Process typed question
-    if typed_q and st.session_state.current_device:
-        with st.spinner("Consulting regulatory knowledge base..."):
-            try:
-                answer = regulatory_chat(typed_q, st.session_state.current_device)
-                st.session_state.chat_history.append({
-                    "question": typed_q,
-                    "answer":   answer
-                })
-            except Exception as e:
-                st.session_state.chat_history.append({
-                    "question": typed_q,
-                    "answer":   f"Error getting response: {e}"
-                })
-
-    # Display full chat history — most recent first
+    # Display chat history
     if st.session_state.chat_history:
         st.markdown("---")
+        st.markdown("**Conversation:**")
         for turn in reversed(st.session_state.chat_history):
             with st.chat_message("user"):
                 st.write(turn["question"])
             with st.chat_message("assistant"):
                 st.write(turn["answer"])
-        if st.button("🗑️ Clear chat history", key="clear_chat"):
-            st.session_state.chat_history = []
+        if st.button("🗑️ Clear conversation",key="clear_chat"):
+            st.session_state.chat_history=[]
             st.rerun()
     else:
-        st.info("Ask a question above — the AI knows the full classification "
-                "context of this device and will give regulatory-specific answers.")
+        st.info(
+            "No questions yet. Click a quick question above or type your own."
+        )
 
     st.divider()
     st.warning(
