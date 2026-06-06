@@ -1,4 +1,5 @@
 
+import os
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -25,18 +26,59 @@ st.markdown("""
 # ── Load data ────────────────────────────────────────────────────────────────
 @st.cache_data
 def load_data():
-    df_cdsco = pd.read_excel("data/regulatory_rules.xlsx", sheet_name="CDSCO")
-    df_fda   = pd.read_excel("data/regulatory_rules.xlsx", sheet_name="FDA")
-    df_eu    = pd.read_excel("data/regulatory_rules.xlsx", sheet_name="EU_MDR")
+    path = "data/regulatory_rules.xlsx"
+    if not os.path.exists(path):
+        st.error(f"Data file not found: {path}. Please add the Excel workbook to the `data/` folder.")
+        st.stop()
+    try:
+        df_cdsco = pd.read_excel(path, sheet_name="CDSCO")
+        df_fda = pd.read_excel(path, sheet_name="FDA")
+        df_eu = pd.read_excel(path, sheet_name="EU_MDR")
+    except Exception as e:
+        st.error(f"Failed to read Excel file: {e}")
+        st.stop()
+
+    # Ensure a `device_type` column exists (fallback: use first column)
+    for df in (df_cdsco, df_fda, df_eu):
+        if "device_type" not in df.columns and len(df.columns) > 0:
+            df.rename(columns={df.columns[0]: "device_type"}, inplace=True)
+
     return df_cdsco, df_fda, df_eu
 
 df_cdsco, df_fda, df_eu = load_data()
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 def classify_device(device_name):
-    return (df_cdsco.loc[df_cdsco["device_type"]==device_name].iloc[0],
-            df_fda.loc[df_fda["device_type"]==device_name].iloc[0],
-            df_eu.loc[df_eu["device_type"]==device_name].iloc[0])
+    def get_row(df):
+        if df is None or df.empty:
+            return pd.Series()
+        matches = df.loc[df["device_type"] == device_name]
+        if not matches.empty:
+            return matches.iloc[0]
+        # fallback to first row with a warning
+        st.warning(f"Device '{device_name}' not found in dataset; using first available row as fallback.")
+        return df.iloc[0]
+
+    return get_row(df_cdsco), get_row(df_fda), get_row(df_eu)
+
+
+def get_val(row, key, default="N/A"):
+    try:
+        if hasattr(row, 'get'):
+            return row.get(key, default)
+        return default
+    except Exception:
+        return default
+
+
+def to_int(val, default=0):
+    try:
+        return int(val)
+    except Exception:
+        try:
+            return int(float(val))
+        except Exception:
+            return default
 
 def get_risk_level(risk_class):
     return {"A":"Low","B":"Medium","C":"High","D":"Critical",
@@ -77,8 +119,11 @@ with st.sidebar:
     st.caption("MDR 2017 · FDA 21 CFR · EU MDR 2017/745")
     st.divider()
 
-    all_devices = sorted(df_cdsco["device_type"].tolist())
-    selected_device = st.selectbox("Device Type", all_devices, index=5)
+    all_devices = sorted(list(pd.Series(df_cdsco.get("device_type", [])).dropna().unique())) if not df_cdsco.empty else []
+    if not all_devices:
+        all_devices = ["(No devices available)"]
+    default_index = 5 if len(all_devices) > 5 else max(0, len(all_devices) - 1)
+    selected_device = st.selectbox("Device Type", all_devices, index=default_index)
 
     st.subheader("Target Markets")
     show_cdsco = st.checkbox("🇮🇳 India (CDSCO)", value=True)
@@ -105,21 +150,21 @@ st.divider()
 cdsco_row, fda_row, eu_row = classify_device(selected_device)
 
 # ── UPGRADE 1: Intended use info box ─────────────────────────────────────────
-st.info(f"**{selected_device}** — Intended use: *{cdsco_row['intended_use']}*")
+st.info(f"**{selected_device}** — Intended use: *{get_val(cdsco_row, 'intended_use', '—')}*")
 
 # ── Risk classification ───────────────────────────────────────────────────────
 st.subheader("Risk Classification")
 col1, col2, col3 = st.columns(3)
 
-for col, row, label, framework in [
+    for col, row, label, framework in [
     (col1, cdsco_row, "CDSCO (India)", "CDSCO"),
     (col2, fda_row,   "FDA (USA)",     "FDA"),
     (col3, eu_row,    "EU MDR (Europe)","EU")
 ]:
-    lvl   = get_risk_level(row["risk_class"])
+    lvl   = get_risk_level(get_val(row, "risk_class", "Unknown"))
     color = get_risk_color(lvl)
     with col:
-        st.metric(label, row["risk_class"])
+        st.metric(label, get_val(row, "risk_class", "Unknown"))
         st.markdown(
             f"<span class='risk-badge' style='background:{color}22;color:{color}'>{lvl} Risk</span>",
             unsafe_allow_html=True
@@ -133,9 +178,18 @@ st.subheader("Approval Timeline Comparison")
 markets, months, colors = [], [], []
 cmap = {"CDSCO (India)":"#1D9E75","FDA (USA)":"#378ADD","CE Mark (EU)":"#D85A30"}
 
-if show_cdsco: markets.append("CDSCO (India)"); months.append(int(cdsco_row["timeline_months"])); colors.append(cmap["CDSCO (India)"])
-if show_fda:   markets.append("FDA (USA)");     months.append(int(fda_row["timeline_months"]));   colors.append(cmap["FDA (USA)"])
-if show_eu:    markets.append("CE Mark (EU)");  months.append(int(eu_row["timeline_months"]));    colors.append(cmap["CE Mark (EU)"])
+if show_cdsco:
+    markets.append("CDSCO (India)")
+    months.append(to_int(get_val(cdsco_row, "timeline_months", 0)))
+    colors.append(cmap["CDSCO (India)"])
+if show_fda:
+    markets.append("FDA (USA)")
+    months.append(to_int(get_val(fda_row, "timeline_months", 0)))
+    colors.append(cmap["FDA (USA)"])
+if show_eu:
+    markets.append("CE Mark (EU)")
+    months.append(to_int(get_val(eu_row, "timeline_months", 0)))
+    colors.append(cmap["CE Mark (EU)"])
 
 if markets:
     fig = go.Figure(go.Bar(
@@ -182,10 +236,10 @@ if active_tabs:
             c1, c2 = st.columns(2)
             with c1:
                 st.markdown("**Key Details**")
-                st.markdown(f"- License type: `{cdsco_row['license_type']}`")
-                st.markdown(f"- Timeline: **{cdsco_row['timeline_months']} months**")
-                st.markdown(f"- QMS required: {cdsco_row['qms_required']}")
-                st.markdown(f"- Clinical data: {cdsco_row['clinical_data_required']}")
+                st.markdown(f"- License type: `{get_val(cdsco_row, 'license_type', 'N/A')}`")
+                st.markdown(f"- Timeline: **{get_val(cdsco_row, 'timeline_months', 'N/A')} months**")
+                st.markdown(f"- QMS required: {get_val(cdsco_row, 'qms_required', 'N/A')}")
+                st.markdown(f"- Clinical data: {get_val(cdsco_row, 'clinical_data_required', 'N/A')}")
             with c2:
                 st.markdown("**Submission Checklist**")
                 for req in build_requirements(cdsco_row, "CDSCO"):
@@ -197,11 +251,11 @@ if active_tabs:
             c1, c2 = st.columns(2)
             with c1:
                 st.markdown("**Key Details**")
-                st.markdown(f"- Pathway: `{fda_row['pathway']}`")
-                st.markdown(f"- Timeline: **{fda_row['timeline_months']} months**")
-                st.markdown(f"- Predicate needed: {fda_row['predicate_needed']}")
-                st.markdown(f"- Clinical trials: {fda_row['clinical_trials_required']}")
-                st.markdown(f"- IDE required: {fda_row['ide_required']}")
+                st.markdown(f"- Pathway: `{get_val(fda_row, 'pathway', 'N/A')}`")
+                st.markdown(f"- Timeline: **{get_val(fda_row, 'timeline_months', 'N/A')} months**")
+                st.markdown(f"- Predicate needed: {get_val(fda_row, 'predicate_needed', 'N/A')}")
+                st.markdown(f"- Clinical trials: {get_val(fda_row, 'clinical_trials_required', 'N/A')}")
+                st.markdown(f"- IDE required: {get_val(fda_row, 'ide_required', 'N/A')}")
             with c2:
                 st.markdown("**Submission Checklist**")
                 for req in build_requirements(fda_row, "FDA"):
@@ -213,11 +267,11 @@ if active_tabs:
             c1, c2 = st.columns(2)
             with c1:
                 st.markdown("**Key Details**")
-                st.markdown(f"- Tech file: `{eu_row['technical_file_type']}`")
-                st.markdown(f"- Timeline: **{eu_row['timeline_months']} months**")
-                st.markdown(f"- Notified body: {eu_row['notified_body_needed']}")
-                st.markdown(f"- Clinical eval: {eu_row['clinical_evaluation_required']}")
-                st.markdown(f"- PMCF required: {eu_row['pmcf_required']}")
+                st.markdown(f"- Tech file: `{get_val(eu_row, 'technical_file_type', 'N/A')}`")
+                st.markdown(f"- Timeline: **{get_val(eu_row, 'timeline_months', 'N/A')} months**")
+                st.markdown(f"- Notified body: {get_val(eu_row, 'notified_body_needed', 'N/A')}")
+                st.markdown(f"- Clinical eval: {get_val(eu_row, 'clinical_evaluation_required', 'N/A')}")
+                st.markdown(f"- PMCF required: {get_val(eu_row, 'pmcf_required', 'N/A')}")
             with c2:
                 st.markdown("**Submission Checklist**")
                 for req in build_requirements(eu_row, "EU"):
@@ -231,15 +285,15 @@ st.subheader("Side-by-Side Summary")
 summary_data = {
     "Parameter"      : ["Risk Class","Pathway/License","Timeline (months)",
                          "QMS / ISO 13485","Clinical Data","Notified Body / IDE"],
-    "CDSCO (India)"  : [cdsco_row["risk_class"], cdsco_row["license_type"],
-                         cdsco_row["timeline_months"], cdsco_row["qms_required"],
-                         cdsco_row["clinical_data_required"], "N/A"],
-    "FDA (USA)"      : [fda_row["risk_class"], fda_row["pathway"],
-                         fda_row["timeline_months"], "Yes (21 CFR 820)",
-                         fda_row["clinical_trials_required"], fda_row["ide_required"]],
-    "CE Mark (EU)"   : [eu_row["risk_class"], eu_row["technical_file_type"],
-                         eu_row["timeline_months"], "Yes (ISO 13485)",
-                         eu_row["clinical_evaluation_required"], eu_row["notified_body_needed"]]
+    "CDSCO (India)"  : [get_val(cdsco_row, "risk_class", "N/A"), get_val(cdsco_row, "license_type", "N/A"),
+                         get_val(cdsco_row, "timeline_months", "N/A"), get_val(cdsco_row, "qms_required", "N/A"),
+                         get_val(cdsco_row, "clinical_data_required", "N/A"), "N/A"],
+    "FDA (USA)"      : [get_val(fda_row, "risk_class", "N/A"), get_val(fda_row, "pathway", "N/A"),
+                         get_val(fda_row, "timeline_months", "N/A"), "Yes (21 CFR 820)",
+                         get_val(fda_row, "clinical_trials_required", "N/A"), get_val(fda_row, "ide_required", "N/A")],
+    "CE Mark (EU)"   : [get_val(eu_row, "risk_class", "N/A"), get_val(eu_row, "technical_file_type", "N/A"),
+                         get_val(eu_row, "timeline_months", "N/A"), "Yes (ISO 13485)",
+                         get_val(eu_row, "clinical_evaluation_required", "N/A"), get_val(eu_row, "notified_body_needed", "N/A")]
 }
 st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
 
