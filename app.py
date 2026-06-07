@@ -738,6 +738,10 @@ elif analyse and device_name.strip():
                 st.error(f"Device 2 failed: {e}"); data2=None
     st.session_state["chat_history"]=[]
     st.session_state["current_device"]=data
+    st.session_state["last_data"]    = data
+    st.session_state["last_data2"]   = data2
+    st.session_state["last_fws"]     = list(selected_fws)
+    st.session_state["last_compare"] = bool(compare_mode and data2 is not None)
     st.session_state["last_data"]=data
     st.session_state["last_data2"]=data2
     st.session_state["last_fws"]=selected_fws
