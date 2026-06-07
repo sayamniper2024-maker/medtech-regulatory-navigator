@@ -506,7 +506,36 @@ def show_device_results(data, selected_fws, prefix=""):
 def generate_pdf(data, selected_fws, data2=None, selected_fws2=None):
     pdf=FPDF(); PAGE_W=180; LABEL_W=55; VALUE_W=PAGE_W-LABEL_W
     pdf.set_margins(15,15,15); pdf.set_auto_page_break(auto=True,margin=15)
-    def safe(t): return str(t).encode("latin-1",errors="replace").decode("latin-1")
+    def safe(t):
+        """Convert any string to FPDF-safe Latin-1, replacing all unicode chars."""
+        s = str(t)
+        # Replace common unicode characters with ASCII equivalents
+        replacements = {
+            "\u2014": "-",   # em dash —
+            "\u2013": "-",   # en dash –
+            "\u2012": "-",   # figure dash
+            "\u2010": "-",   # hyphen
+            "\u2018": "'",   # left single quote
+            "\u2019": "'",   # right single quote
+            "\u201c": '"',   # left double quote
+            "\u201d": '"',   # right double quote
+            "\u2026": "...", # ellipsis
+            "\u2192": "->",  # right arrow
+            "\u2190": "<-",  # left arrow
+            "\u00b0": "deg", # degree sign
+            "\u00b5": "u",   # micro sign
+            "\u00d7": "x",   # multiplication sign
+            "\u00f7": "/",   # division sign
+            "\u2264": "<=",  # less than or equal
+            "\u2265": ">=",  # greater than or equal
+            "\u00ae": "(R)", # registered trademark
+            "\u00a9": "(C)", # copyright
+            "\u2122": "(TM)",# trademark
+        }
+        for unicode_char, ascii_equiv in replacements.items():
+            s = s.replace(unicode_char, ascii_equiv)
+        # Final fallback: encode to latin-1, replacing anything still not supported
+        return s.encode("latin-1", errors="replace").decode("latin-1")
     def sh(title,color=(30,158,117)):
         pdf.set_font("Helvetica","B",13); pdf.set_text_color(*color)
         pdf.cell(PAGE_W,9,safe(title),ln=True); pdf.set_text_color(0,0,0)
@@ -603,7 +632,7 @@ def generate_pdf(data, selected_fws, data2=None, selected_fws2=None):
     pdf.set_font("Helvetica","B",18)
     pdf.cell(PAGE_W,12,"MedTech Regulatory Pathway Report",ln=True,align="C")
     pdf.set_font("Helvetica","",10); pdf.set_text_color(120,120,120)
-    pdf.cell(PAGE_W,6,"AI-powered global regulatory analysis — 7 frameworks",
+    pdf.cell(PAGE_W,6,"AI-powered global regulatory analysis - 7 frameworks",
              ln=True,align="C")
     pdf.set_text_color(0,0,0); pdf.ln(4)
     pdf.set_draw_color(30,158,117); pdf.set_line_width(0.8)
