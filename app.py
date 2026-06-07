@@ -112,6 +112,62 @@ def build_requirements(row, framework):
         if row["pmcf_required"]=="Yes": reqs.append("PMCF plan")
     return reqs
 
+
+def normalize_text(text):
+    return (text or "").strip().lower()
+
+
+def build_ai_response(question, selected_device, cdsco_row, fda_row, eu_row):
+    question = normalize_text(question)
+    if not question:
+        return "Please ask a question about risk class, approval timeline, pathway choice, or submission requirements."
+
+    device_info = f"Device: {selected_device}. "
+    cdsco_risk = get_val(cdsco_row, "risk_class", "unknown")
+    fda_risk = get_val(fda_row, "risk_class", "unknown")
+    eu_risk = get_val(eu_row, "risk_class", "unknown")
+    cdsco_timeline = get_val(cdsco_row, "timeline_months", "unknown")
+    fda_timeline = get_val(fda_row, "timeline_months", "unknown")
+    eu_timeline = get_val(eu_row, "timeline_months", "unknown")
+
+    if any(term in question for term in ["risk", "classification", "class"]):
+        return (
+            f"For {selected_device}, the CDSCO risk class is {cdsco_risk}, FDA class is {fda_risk}, "
+            f"and EU MDR class is {eu_risk}. "
+            "Use this to compare safety, clinical data, and regulatory oversight requirements."
+        )
+
+    if any(term in question for term in ["timeline", "months", "approval time", "duration"]):
+        return (
+            f"Expected review timelines are: CDSCO {cdsco_timeline} months, FDA {fda_timeline} months, "
+            f"CE Mark {eu_timeline} months. "
+            "The shortest path is usually the most predictable but depends on your chosen market and submission type."
+        )
+
+    if any(term in question for term in ["checklist", "documents", "submission", "requirements"]):
+        cdsco_reqs = build_requirements(cdsco_row, "CDSCO") if get_val(cdsco_row, "device_type", None) else []
+        fda_reqs = build_requirements(fda_row, "FDA") if get_val(fda_row, "device_type", None) else []
+        eu_reqs = build_requirements(eu_row, "EU") if get_val(eu_row, "device_type", None) else []
+        return (
+            f"CDSCO checklist: {', '.join(cdsco_reqs[:4])}. "
+            f"FDA checklist: {', '.join(fda_reqs[:4])}. "
+            f"EU MDR checklist: {', '.join(eu_reqs[:4])}. "
+            "Ask for more detail on any specific market if needed."
+        )
+
+    if any(term in question for term in ["pathway", "510(k)", "pma", "md-1", "ce mark", "ce"]):
+        return (
+            f"Recommended pathways for {selected_device}: CDSCO license type {get_val(cdsco_row, 'license_type', 'N/A')}, "
+            f"FDA pathway {get_val(fda_row, 'pathway', 'N/A')}, EU technical file {get_val(eu_row, 'technical_file_type', 'N/A')}. "
+            "Select the market where your device and claims best align to minimize approval risk."
+        )
+
+    return (
+        f"{device_info} I can help you compare risk class, timeline, and required documentation across CDSCO, FDA, and EU MDR. "
+        "Try asking: 'What is the approval timeline?', 'What documents do I need?', or 'What is the risk class?'"
+    )
+
+
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.image("https://img.icons8.com/color/96/dna-helix.png", width=60)
@@ -156,7 +212,7 @@ st.info(f"**{selected_device}** — Intended use: *{get_val(cdsco_row, 'intended
 st.subheader("Risk Classification")
 col1, col2, col3 = st.columns(3)
 
-    for col, row, label, framework in [
+for col, row, label, framework in [
     (col1, cdsco_row, "CDSCO (India)", "CDSCO"),
     (col2, fda_row,   "FDA (USA)",     "FDA"),
     (col3, eu_row,    "EU MDR (Europe)","EU")
@@ -297,9 +353,44 @@ summary_data = {
 }
 st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
 
+# ── Chatbot ──────────────────────────────────────────────────────────────────
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = [
+        {
+            "role": "assistant",
+            "content": (
+                "Hello! I am the MedTech Regulatory Navigator. Ask me about risk class, approval timeline, "
+                "submission requirements, or the best pathway for the selected device."
+            )
+        }
+    ]
+
+with st.expander("Chat with the Navigator", expanded=True):
+    message_fn = getattr(st, "chat_message", None)
+    for message in st.session_state.chat_history:
+        if message_fn is not None:
+            message_fn(message["role"]).write(message["content"])
+        else:
+            st.markdown(f"**{message['role'].title()}:** {message['content']}")
+
+    if hasattr(st, "chat_input"):
+        user_input = st.chat_input("Ask a question about this device")
+        input_key = None
+    else:
+        input_key = "chat_text_input"
+        user_input = st.text_input("Ask a question about this device", key=input_key)
+
+    if user_input:
+        st.session_state.chat_history.append({"role": "user", "content": user_input})
+        answer = build_ai_response(user_input, selected_device, cdsco_row, fda_row, eu_row)
+        st.session_state.chat_history.append({"role": "assistant", "content": answer})
+        if input_key:
+            st.session_state[input_key] = ""
+        st.experimental_rerun()
+
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown(
-    "<div class=\'footer\'>Data sources: CDSCO MDR 2017 | FDA 21 CFR | "
+    "<div class='footer'>Data sources: CDSCO MDR 2017 | FDA 21 CFR | "
     "EU MDR 2017/745 | ISO 13485 | Built with Python + Streamlit + Plotly</div>",
     unsafe_allow_html=True
 )
