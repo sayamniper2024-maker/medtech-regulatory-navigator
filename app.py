@@ -18,6 +18,9 @@ for _k, _v in {
     "current_device"     : None,
     "chat_input_counter" : 0,
     "_queued_question"   : None,
+    "_queued_device"     : None,
+    "_queued_device"     : None,
+    "_queued_device"     : None,
 }.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
@@ -651,9 +654,46 @@ st.markdown("*AI-powered classification across 7 global regulatory frameworks*")
 st.divider()
 
 # ═════════════════════════════════════════════════════════════════════════════
-# CHATBOT QUEUE PROCESSOR
-# Runs BEFORE any widget. Pure Python — NO st.* calls whatsoever.
-# This is the only correct way to handle async questions in Streamlit.
+# CHATBOT QUEUE PROCESSOR — Pure Python, zero st.* calls
+# _queued_question  : the question text
+# _queued_device    : snapshot of device data taken when question was queued
+# Both stored together so processor never depends on current_device timing
+# ═════════════════════════════════════════════════════════════════════════════
+if st.session_state.get("_queued_question") and st.session_state.get("_queued_device"):
+    _q   = st.session_state["_queued_question"]
+    _ctx = st.session_state["_queued_device"]
+    st.session_state["_queued_question"] = None
+    st.session_state["_queued_device"]   = None
+    try:
+        _answer = regulatory_chat(str(_q), _ctx)
+    except Exception as _err:
+        _answer = f"Error getting response: {str(_err)}"
+    st.session_state["chat_history"].append({"question":str(_q),"answer":_answer})
+    st.session_state["chat_input_counter"] += 1
+# ═════════════════════════════════════════════════════════════════════════════
+if st.session_state.get("_queued_question") and st.session_state.get("_queued_device"):
+    _q   = st.session_state["_queued_question"]
+    _ctx = st.session_state["_queued_device"]
+    st.session_state["_queued_question"] = None
+    st.session_state["_queued_device"]   = None
+    try:
+        _answer = regulatory_chat(str(_q), _ctx)
+    except Exception as _err:
+        _answer = f"Error getting response: {str(_err)}"
+    st.session_state["chat_history"].append({"question":str(_q),"answer":_answer})
+    st.session_state["chat_input_counter"] += 1
+# ═════════════════════════════════════════════════════════════════════════════
+if st.session_state.get("_queued_question") and st.session_state.get("_queued_device"):
+    _q   = st.session_state["_queued_question"]
+    _ctx = st.session_state["_queued_device"]
+    st.session_state["_queued_question"] = None
+    st.session_state["_queued_device"]   = None
+    try:
+        _answer = regulatory_chat(str(_q), _ctx)
+    except Exception as _err:
+        _answer = f"Error getting response: {str(_err)}"
+    st.session_state["chat_history"].append({"question":str(_q),"answer":_answer})
+    st.session_state["chat_input_counter"] += 1
 # ═════════════════════════════════════════════════════════════════════════════
 _pending = st.session_state.get("_queued_question")
 if _pending:
@@ -794,6 +834,7 @@ if analyse_show and data:
     for idx,sug in enumerate(suggestions):
         if qcols[idx%3].button(sug,key=f"qbtn_{idx}",use_container_width=True):
             st.session_state["_queued_question"] = sug
+            st.session_state["_queued_device"]   = st.session_state.get("current_device")
             st.rerun()
 
     st.markdown("**Or type your own:**")
@@ -806,6 +847,7 @@ if analyse_show and data:
     if btn_col.button("Send",key="send_btn",type="primary"):
         if typed_q.strip():
             st.session_state["_queued_question"] = typed_q.strip()
+            st.session_state["_queued_device"]   = st.session_state.get("current_device")
             st.rerun()
 
     if st.session_state.chat_history:
@@ -829,7 +871,7 @@ if analyse_show and data:
         "Health Canada SOR/98-282 | Japan PMD Act | Australia TGO 2002 | "
         "Russia Roszdravnadzor Decree No.1684. "
         "Always verify with a qualified regulatory affairs professional.",
-        icon="warning"
+        icon="⚠️"
     )
 
 else:
