@@ -19,6 +19,11 @@ for _k, _v in {
     "chat_input_counter" : 0,
     "_queued_question"   : None,
     "_queued_device"     : None,
+    "last_data"          : None,
+    "last_data2"         : None,
+    "last_fws"           : [],
+    "last_compare"       : False,
+    "_queued_device"     : None,
     "_queued_device"     : None,
     "_queued_device"     : None,
 }.items():
@@ -713,6 +718,10 @@ if _pending:
 # ── Load classification data ──────────────────────────────────────────────────
 if "reload_data" in st.session_state:
     data=st.session_state.pop("reload_data"); data2=None; analyse_show=True
+    st.session_state["last_data"]=data
+    st.session_state["last_data2"]=None
+    st.session_state["last_fws"]=selected_fws
+    st.session_state["last_compare"]=False
 elif analyse and device_name.strip():
     analyse_show=True
     with st.spinner(f"Classifying {device_name}..."):
@@ -729,6 +738,10 @@ elif analyse and device_name.strip():
                 st.error(f"Device 2 failed: {e}"); data2=None
     st.session_state["chat_history"]=[]
     st.session_state["current_device"]=data
+    st.session_state["last_data"]=data
+    st.session_state["last_data2"]=data2
+    st.session_state["last_fws"]=selected_fws
+    st.session_state["last_compare"]=compare_mode and data2 is not None
     st.session_state.search_history.append({
         "device":data["device_name"],"confidence":data.get("confidence","--"),
         "cdsco_class":data["cdsco"]["risk_class"],
@@ -739,7 +752,12 @@ elif analyse and not device_name.strip():
     st.warning("Please enter a device name first.")
     analyse_show=False; data=None; data2=None
 else:
-    analyse_show=False; data=None; data2=None
+    # Not a fresh classification — restore from session state
+    # This keeps results visible when chat buttons trigger reruns
+    data         = st.session_state.get("last_data")
+    data2        = st.session_state.get("last_data2")
+    selected_fws = st.session_state.get("last_fws") or selected_fws
+    analyse_show = data is not None
 
 # ── Results ───────────────────────────────────────────────────────────────────
 if analyse_show and data:
