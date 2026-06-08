@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from groq import Groq
 from fpdf import FPDF
 import json, os, io
+import fitz  # PyMuPDF, io
 import fitz  # PyMuPDF
 
 st.set_page_config(page_title="MedTech Regulatory Navigator", page_icon="🧬", layout="wide")
@@ -19,6 +20,9 @@ for _k, _v in {
     "current_device"     : None,
     "chat_input_counter" : 0,
     "_queued_question"   : None,
+    "pdf_device_name"    : "",
+    "pdf_device_desc"    : "",
+    "pdf_confidence"     : "",
     "pdf_device_name"    : "",
     "pdf_device_desc"    : "",
     "pdf_confidence"     : "",
@@ -661,6 +665,64 @@ Return ONLY the JSON."""
         if raw.startswith("json"): raw = raw[4:]
     return json.loads(raw.strip())
 
+
+# ── PDF text extractor ────────────────────────────────────────────────────────
+def extract_pdf_text(uploaded_file, max_chars=3000):
+    """
+    Extracts plain text from an uploaded PDF file.
+    Truncates to max_chars to stay within Groq token limits.
+    Returns (text, page_count, success).
+    """
+    try:
+        pdf_bytes = uploaded_file.read()
+        doc       = fitz.open(stream=pdf_bytes, filetype="pdf")
+        text      = ""
+        for page in doc:
+            text += page.get_text()
+            if len(text) >= max_chars:
+                break
+        doc.close()
+        return text[:max_chars], len(doc), True
+    except Exception as e:
+        return "", 0, False
+
+def ai_extract_device_info(pdf_text):
+    """
+    Sends extracted PDF text to Groq and asks it to identify:
+    - device name
+    - intended use
+    - description
+    Returns a dict with those 3 fields.
+    """
+    prompt = f"""You are a medical device regulatory expert.
+Read this device document text and extract key information.
+Return ONLY valid JSON, nothing else.
+
+Document text:
+{pdf_text}
+
+Return exactly this JSON:
+{{
+  "device_name": "the medical device name (be specific, e.g. Drug-Eluting Coronary Stent)",
+  "intended_use": "one sentence clinical intended use",
+  "description": "2-3 sentence technical description suitable for regulatory classification",
+  "device_type_hint": "most likely device category e.g. implant/diagnostic/therapeutic/monitoring",
+  "confidence": "High/Medium/Low"
+}}
+Return ONLY the JSON."""
+
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role":"user","content":prompt}],
+        temperature=0.1,
+        max_tokens=400,
+    )
+    raw = response.choices[0].message.content.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"): raw = raw[4:]
+    return json.loads(raw.strip())
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## Regulatory Navigator")
@@ -736,6 +798,12 @@ with st.sidebar:
                         if compare_mode else ""
         device_desc2 = st.text_area("Description 2 (optional)",height=60) \
                         if compare_mode else ""
+    else:
+        device_name  = st.selectbox("Device 1",presets)
+        device_desc  = ""
+        device_name2 = st.selectbox("Device 2",presets,index=1) \
+                        if compare_mode else ""
+        device_desc2 = ""
     else:
         device_name  = st.selectbox("Device 1",presets)
         device_desc  = ""
