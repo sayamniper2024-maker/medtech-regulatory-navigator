@@ -4,9 +4,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from groq import Groq
 from fpdf import FPDF
+import fitz
 import json, os, io
-import fitz  # PyMuPDF, io
-import fitz  # PyMuPDF
 
 st.set_page_config(page_title="MedTech Regulatory Navigator", page_icon="🧬", layout="wide")
 
@@ -20,18 +19,13 @@ for _k, _v in {
     "current_device"     : None,
     "chat_input_counter" : 0,
     "_queued_question"   : None,
-    "pdf_device_name"    : "",
-    "pdf_device_desc"    : "",
-    "pdf_confidence"     : "",
-    "pdf_device_name"    : "",
-    "pdf_device_desc"    : "",
-    "pdf_confidence"     : "",
     "_queued_device"     : None,
     "last_data"          : None,
     "last_data2"         : None,
     "last_fws"           : [],
     "last_compare"       : False,
-    "_queued_device"     : None,
+    "pdf_device_name"    : "",
+    "pdf_device_desc"    : "",
 }.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
@@ -108,28 +102,19 @@ FW_FIELDS = {
 
 RULE_EXCEPTIONS = """
 === CRITICAL CLASSIFICATION EXCEPTIONS - CHECK THESE FIRST ===
-
 EU MDR 2017/745 Annex VIII Rule 8 - Class III (NOT IIb):
 - Coronary stents, cardiac stents, drug-eluting stents -> Class III
 - Any implantable device contacting heart or central circulatory system -> Class III
 - Total knee replacement (TKR), total hip replacement (THR) -> Class III
 - All joint replacement implants -> Class III
-- Pacemakers, ICDs -> Class III (Rule 7 active implantable)
+- Pacemakers, ICDs -> Class III (Rule 7)
 - LVAD, mechanical heart valves -> Class III
-
-FDA 21 CFR correct citations:
-- Cardiovascular = Part 870 (NOT Part 882 which is neurology)
+FDA 21 CFR - cardiovascular = Part 870 (NOT Part 882):
 - Coronary stents -> Class III, PMA, 21 CFR 870.3945
 - Joint replacements -> Class III, PMA, 21 CFR 888.3400/888.3320
-
-Russia Roszdravnadzor (Decree No.1684, March 2025):
-- Classes: 1 (lowest), 2a, 2b, 3 (highest)
-- RU REP required for ALL foreign manufacturers
-- Local lab testing required for ALL classes
-- Site inspection mandatory for Class 2a sterile, 2b and 3 (from Jan 2024)
-- ISO 13485 mandatory for Class 2a sterile, 2b and 3
+Russia Roszdravnadzor (Decree No.1684):
+- Classes: 1, 2a, 2b, 3. RU REP required for ALL foreign manufacturers.
 - Coronary stents, joint replacements, pacemakers -> Class 3
-
 CDSCO: cardiac implants + joint replacements -> Class D
 Health Canada: cardiac implants + joint replacements -> Class IV
 Japan: cardiac implants + joint replacements -> Class IV, Approval, DMAH required
@@ -142,29 +127,29 @@ KNOWN_CORRECTIONS = [
                     "drug eluting stent","bare metal stent","bare-metal stent",
                     "intravascular stent","coronary artery stent"],
         "corrections":{
-            "fda"  :{"risk_class":"III","pathway":"PMA","rule_applied":"21 CFR 870.3945",
-                     "clinical_trials_required":"Yes","ide_required":"Yes",
-                     "predicate_needed":"No","timeline_months":36},
-            "eu"   :{"risk_class":"III","notified_body_needed":"Yes",
-                     "rule_applied":"EU MDR Annex VIII Rule 8",
-                     "clinical_evaluation_required":"Yes","pmcf_required":"Yes",
-                     "technical_file_type":"Full Tech File","timeline_months":24},
-            "cdsco":{"risk_class":"D","license_type":"MD-14",
-                     "rule_applied":"MDR 2017 Schedule 1",
-                     "clinical_data_required":"Yes","timeline_months":18},
+            "fda"          :{"risk_class":"III","pathway":"PMA","rule_applied":"21 CFR 870.3945",
+                             "clinical_trials_required":"Yes","ide_required":"Yes",
+                             "predicate_needed":"No","timeline_months":36},
+            "eu"           :{"risk_class":"III","notified_body_needed":"Yes",
+                             "rule_applied":"EU MDR Annex VIII Rule 8",
+                             "clinical_evaluation_required":"Yes","pmcf_required":"Yes",
+                             "technical_file_type":"Full Tech File","timeline_months":24},
+            "cdsco"        :{"risk_class":"D","license_type":"MD-14",
+                             "rule_applied":"MDR 2017 Schedule 1",
+                             "clinical_data_required":"Yes","timeline_months":18},
             "health_canada":{"risk_class":"IV","licence_type":"Device Licence",
                              "rule_applied":"SOR/98-282","timeline_months":18},
-            "japan":{"risk_class":"IV","approval_type":"Approval",
-                     "rule_applied":"PMD Act Class IV",
-                     "dmah_required":"Yes","timeline_months":36},
-            "australia":{"risk_class":"III","artg_pathway":"Conformity assessment",
-                         "rule_applied":"TGA Schedule 2","timeline_months":20},
-            "russia":{"risk_class":"3","registration_type":"Full registration (RZN)",
-                      "rule_applied":"Decree No.1684 Class 3",
-                      "clinical_investigation_required":"Yes",
-                      "iso_13485_required":"Yes","local_testing_required":"Yes",
-                      "site_inspection_required":"Yes","ru_rep_required":"Yes",
-                      "timeline_months":24},
+            "japan"        :{"risk_class":"IV","approval_type":"Approval",
+                             "rule_applied":"PMD Act Class IV",
+                             "dmah_required":"Yes","timeline_months":36},
+            "australia"    :{"risk_class":"III","artg_pathway":"Conformity assessment",
+                             "rule_applied":"TGA Schedule 2","timeline_months":20},
+            "russia"       :{"risk_class":"3","registration_type":"Full registration (RZN)",
+                             "rule_applied":"Decree No.1684 Class 3",
+                             "clinical_investigation_required":"Yes",
+                             "iso_13485_required":"Yes","local_testing_required":"Yes",
+                             "site_inspection_required":"Yes","ru_rep_required":"Yes",
+                             "timeline_months":24},
         },
         "note":"Coronary/cardiac stents contact central circulatory system - "
                "escalated to highest class in all frameworks."
@@ -174,28 +159,28 @@ KNOWN_CORRECTIONS = [
                     "knee replacement","joint replacement","femoral stem",
                     "acetabular cup","tibial base plate"],
         "corrections":{
-            "fda"  :{"risk_class":"III","pathway":"PMA","predicate_needed":"No",
-                     "clinical_trials_required":"Yes","ide_required":"Yes",
-                     "rule_applied":"21 CFR 888.3400/888.3320","timeline_months":36},
-            "eu"   :{"risk_class":"III","notified_body_needed":"Yes",
-                     "rule_applied":"EU MDR Annex VIII Rule 8",
-                     "clinical_evaluation_required":"Yes","pmcf_required":"Yes",
-                     "technical_file_type":"Full Tech File","timeline_months":24},
-            "cdsco":{"risk_class":"D","license_type":"MD-14",
-                     "rule_applied":"MDR 2017 Schedule 1","timeline_months":18},
+            "fda"          :{"risk_class":"III","pathway":"PMA","predicate_needed":"No",
+                             "clinical_trials_required":"Yes","ide_required":"Yes",
+                             "rule_applied":"21 CFR 888.3400/888.3320","timeline_months":36},
+            "eu"           :{"risk_class":"III","notified_body_needed":"Yes",
+                             "rule_applied":"EU MDR Annex VIII Rule 8",
+                             "clinical_evaluation_required":"Yes","pmcf_required":"Yes",
+                             "technical_file_type":"Full Tech File","timeline_months":24},
+            "cdsco"        :{"risk_class":"D","license_type":"MD-14",
+                             "rule_applied":"MDR 2017 Schedule 1","timeline_months":18},
             "health_canada":{"risk_class":"IV","licence_type":"Device Licence",
                              "rule_applied":"SOR/98-282","timeline_months":18},
-            "japan":{"risk_class":"IV","approval_type":"Approval",
-                     "rule_applied":"PMD Act Class IV",
-                     "dmah_required":"Yes","timeline_months":36},
-            "australia":{"risk_class":"III","artg_pathway":"Conformity assessment",
-                         "rule_applied":"TGA Schedule 2","timeline_months":20},
-            "russia":{"risk_class":"3","registration_type":"Full registration (RZN)",
-                      "rule_applied":"Decree No.1684 Class 3",
-                      "clinical_investigation_required":"Yes",
-                      "iso_13485_required":"Yes","local_testing_required":"Yes",
-                      "site_inspection_required":"Yes","ru_rep_required":"Yes",
-                      "timeline_months":24},
+            "japan"        :{"risk_class":"IV","approval_type":"Approval",
+                             "rule_applied":"PMD Act Class IV",
+                             "dmah_required":"Yes","timeline_months":36},
+            "australia"    :{"risk_class":"III","artg_pathway":"Conformity assessment",
+                             "rule_applied":"TGA Schedule 2","timeline_months":20},
+            "russia"       :{"risk_class":"3","registration_type":"Full registration (RZN)",
+                             "rule_applied":"Decree No.1684 Class 3",
+                             "clinical_investigation_required":"Yes",
+                             "iso_13485_required":"Yes","local_testing_required":"Yes",
+                             "site_inspection_required":"Yes","ru_rep_required":"Yes",
+                             "timeline_months":24},
         },
         "note":"Joint replacements are Class III/3 in all major frameworks."
     },
@@ -216,7 +201,7 @@ def validate_and_correct(result):
                     fw_fixes.append(field)
             if fw_fixes:
                 corrections_made.append(
-                    f"**{FRAMEWORKS[fw]['label']}**: corrected {', '.join(fw_fixes)}"
+                    f"**{FRAMEWORKS[fw]['label']}**: corrected {chr(44).join(fw_fixes)}"
                 )
         if corrections_made:
             result["_correction_note"] = rule["note"]
@@ -237,35 +222,29 @@ Device: {device_name}
 Return exactly this JSON:
 {{
   "device_name":"{device_name}","intended_use":"one line clinical intended use",
-  "cdsco":{{"risk_class":"A/B/C/D","license_type":"MD-5/MD-9/MD-14",
-    "timeline_months":0,"qms_required":"Yes/No","clinical_data_required":"Yes/No",
+  "cdsco":{{"risk_class":"A/B/C/D","license_type":"MD-5/MD-9/MD-14","timeline_months":0,
+    "qms_required":"Yes/No","clinical_data_required":"Yes/No",
     "reasoning":"cite MDR 2017 rule","rule_applied":"Schedule rule"}},
-  "fda":{{"risk_class":"I/II/III","pathway":"Exempt/510(k)/PMA",
-    "predicate_needed":"Yes/No","timeline_months":0,
-    "clinical_trials_required":"Yes/No","ide_required":"Yes/No",
+  "fda":{{"risk_class":"I/II/III","pathway":"Exempt/510(k)/PMA","predicate_needed":"Yes/No",
+    "timeline_months":0,"clinical_trials_required":"Yes/No","ide_required":"Yes/No",
     "reasoning":"cite 21 CFR part","rule_applied":"21 CFR section"}},
-  "eu":{{"risk_class":"I/IIa/IIb/III","notified_body_needed":"Yes/No",
-    "timeline_months":0,"technical_file_type":"Basic UDI-DI/Full Tech File",
-    "clinical_evaluation_required":"Yes/No","pmcf_required":"Yes/No",
-    "reasoning":"cite Annex VIII rule","rule_applied":"Rule number"}},
+  "eu":{{"risk_class":"I/IIa/IIb/III","notified_body_needed":"Yes/No","timeline_months":0,
+    "technical_file_type":"Basic UDI-DI/Full Tech File","clinical_evaluation_required":"Yes/No",
+    "pmcf_required":"Yes/No","reasoning":"cite Annex VIII rule","rule_applied":"Rule number"}},
   "health_canada":{{"risk_class":"I/II/III/IV","licence_type":"MDEL only/Device Licence",
     "timeline_months":0,"qms_required":"Yes/No","clinical_data_required":"Yes/No",
     "hpfb_review":"Yes/No","reasoning":"cite SOR/98-282","rule_applied":"SOR rule"}},
   "japan":{{"risk_class":"I/II/III/IV","approval_type":"Notification/Certification/Approval",
     "dmah_required":"Yes","timeline_months":0,"clinical_trial_required":"Yes/No",
     "jis_standard_required":"Yes/No","reasoning":"cite PMD Act","rule_applied":"PMD Act"}},
-  "australia":{{"risk_class":"I/IIa/IIb/III/AIMD",
-    "artg_pathway":"Self-assessment/Conformity assessment",
-    "timeline_months":0,"audited_qms_required":"Yes/No",
-    "clinical_evidence_required":"Yes/No",
+  "australia":{{"risk_class":"I/IIa/IIb/III/AIMD","artg_pathway":"Self-assessment/Conformity assessment",
+    "timeline_months":0,"audited_qms_required":"Yes/No","clinical_evidence_required":"Yes/No",
     "conformity_assessment_body":"None/TGA/TGA or Notified Body",
     "reasoning":"cite TGA rule","rule_applied":"TGA rule"}},
-  "russia":{{"risk_class":"1/2a/2b/3",
-    "registration_type":"Simplified registration (RZN)/Full registration (RZN)/EAEU registration",
-    "timeline_months":0,"iso_13485_required":"Yes/No",
-    "local_testing_required":"Yes","clinical_investigation_required":"Yes/No",
-    "site_inspection_required":"Yes/No","ru_rep_required":"Yes",
-    "reasoning":"cite Decree No.1684 rule","rule_applied":"Decree No.1684 class"}},
+  "russia":{{"risk_class":"1/2a/2b/3","registration_type":"Simplified/Full registration (RZN)/EAEU",
+    "timeline_months":0,"iso_13485_required":"Yes/No","local_testing_required":"Yes",
+    "clinical_investigation_required":"Yes/No","site_inspection_required":"Yes/No",
+    "ru_rep_required":"Yes","reasoning":"cite Decree No.1684","rule_applied":"Decree No.1684"}},
   "confidence":"High/Medium/Low","disclaimer":""
 }}"""
     response = client.chat.completions.create(
@@ -292,8 +271,7 @@ def regulatory_chat(question, device_data):
         d = device_data.get(fw,{})
         if d:
             context_lines.append(
-                f"  {FRAMEWORKS[fw]['label']}: "
-                f"Class {d.get('risk_class','--')} | "
+                f"  {FRAMEWORKS[fw]['label']}: Class {d.get('risk_class','--')} | "
                 f"Pathway: {d.get(PATHWAY_KEY.get(fw,''),'--')} | "
                 f"{d.get('timeline_months','--')} months | "
                 f"Rule: {d.get('rule_applied','--')}"
@@ -303,8 +281,8 @@ def regulatory_chat(question, device_data):
         "with deep knowledge of CDSCO MDR 2017, FDA 21 CFR, EU MDR 2017/745, "
         "Health Canada SOR/98-282, Japan PMD Act, Australia TGA, "
         "Russia Roszdravnadzor Decree No.1684, ISO 13485, ISO 14971, IEC 62304.\n\n"
-        "Device context:\n" + "\n".join(context_lines) + "\n\n"
-        "Answer accurately and concisely. Cite regulatory rules. Max 300 words."
+        "Device context:\n" + "\n".join(context_lines) +
+        "\n\nAnswer accurately and concisely. Cite regulatory rules. Max 300 words."
     )
     messages = [{"role":"system","content":system_msg}]
     for turn in st.session_state.chat_history[-6:]:
@@ -318,6 +296,48 @@ def regulatory_chat(question, device_data):
         max_tokens=700,
     )
     return response.choices[0].message.content.strip()
+
+def extract_pdf_text(uploaded_file, max_chars=3000):
+    try:
+        pdf_bytes = uploaded_file.read()
+        doc       = fitz.open(stream=pdf_bytes, filetype="pdf")
+        text      = ""
+        page_count = len(doc)
+        for page in doc:
+            text += page.get_text()
+            if len(text) >= max_chars:
+                break
+        doc.close()
+        return text[:max_chars], page_count, True
+    except Exception as e:
+        return "", 0, False
+
+def ai_extract_device_info(pdf_text):
+    prompt = f"""You are a medical device regulatory expert.
+Read this device document and extract key information.
+Return ONLY valid JSON, nothing else.
+
+Document text:
+{pdf_text}
+
+Return exactly this JSON:
+{{
+  "device_name": "specific medical device name",
+  "intended_use": "one sentence clinical intended use",
+  "description": "2-3 sentence technical description for regulatory classification",
+  "confidence": "High/Medium/Low"
+}}"""
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role":"user","content":prompt}],
+        temperature=0.1,
+        max_tokens=400,
+    )
+    raw = response.choices[0].message.content.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"): raw = raw[4:]
+    return json.loads(raw.strip())
 
 def build_world_map(data, selected_fws, prefix=""):
     countries, timelines, hover = [], [], []
@@ -359,6 +379,16 @@ def build_world_map(data, selected_fws, prefix=""):
         dragmode="pan",
     )
     return fig
+
+def safe_pdf(t):
+    s = str(t)
+    for uc,ac in [
+        ("\u2014","-"),("\u2013","-"),("\u2018","'"),("\u2019","'"),
+        ("\u201c",'"'),("\u201d",'"'),("\u2026","..."),("\u2192","->"),
+        ("\u00ae","(R)"),("\u00a9","(C)"),("\u2122","(TM)"),
+    ]:
+        s = s.replace(uc,ac)
+    return s.encode("latin-1",errors="replace").decode("latin-1")
 
 def show_device_results(data, selected_fws, prefix=""):
     conf        = data.get("confidence","Medium")
@@ -473,18 +503,6 @@ def show_device_results(data, selected_fws, prefix=""):
             data[fw].get("rule_applied","--"),
         ]
     st.dataframe(pd.DataFrame(summary),use_container_width=True,hide_index=True)
-
-def safe_pdf(t):
-    s = str(t)
-    for uc,ac in [
-        ("\u2014","-"),("\u2013","-"),("\u2012","-"),("\u2010","-"),
-        ("\u2018","'"),("\u2019","'"),("\u201c",'"'),('\u201d','"'),
-        ("\u2026","..."),("\u2192","->"),("\u2190","<-"),
-        ("\u00b0","deg"),("\u00d7","x"),("\u00ae","(R)"),
-        ("\u00a9","(C)"),("\u2122","(TM)"),("\u2264","<="),("\u2265",">="),
-    ]:
-        s = s.replace(uc,ac)
-    return s.encode("latin-1",errors="replace").decode("latin-1")
 
 def generate_pdf(data, selected_fws, data2=None, selected_fws2=None):
     pdf=FPDF(); PAGE_W=180; LABEL_W=55; VALUE_W=PAGE_W-LABEL_W
@@ -607,122 +625,6 @@ def generate_pdf(data, selected_fws, data2=None, selected_fws2=None):
         "Verify with a qualified regulatory affairs professional.",align="C")
     return bytes(pdf.output())
 
-
-# ── PDF text extractor ────────────────────────────────────────────────────────
-def extract_pdf_text(uploaded_file, max_chars=3000):
-    """
-    Extracts plain text from an uploaded PDF file.
-    Truncates to max_chars to stay within Groq token limits.
-    Returns (text, page_count, success).
-    """
-    try:
-        pdf_bytes = uploaded_file.read()
-        doc       = fitz.open(stream=pdf_bytes, filetype="pdf")
-        text      = ""
-        for page in doc:
-            text += page.get_text()
-            if len(text) >= max_chars:
-                break
-        doc.close()
-        return text[:max_chars], len(doc), True
-    except Exception as e:
-        return "", 0, False
-
-def ai_extract_device_info(pdf_text):
-    """
-    Sends extracted PDF text to Groq and asks it to identify:
-    - device name
-    - intended use
-    - description
-    Returns a dict with those 3 fields.
-    """
-    prompt = f"""You are a medical device regulatory expert.
-Read this device document text and extract key information.
-Return ONLY valid JSON, nothing else.
-
-Document text:
-{pdf_text}
-
-Return exactly this JSON:
-{{
-  "device_name": "the medical device name (be specific, e.g. Drug-Eluting Coronary Stent)",
-  "intended_use": "one sentence clinical intended use",
-  "description": "2-3 sentence technical description suitable for regulatory classification",
-  "device_type_hint": "most likely device category e.g. implant/diagnostic/therapeutic/monitoring",
-  "confidence": "High/Medium/Low"
-}}
-Return ONLY the JSON."""
-
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role":"user","content":prompt}],
-        temperature=0.1,
-        max_tokens=400,
-    )
-    raw = response.choices[0].message.content.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"): raw = raw[4:]
-    return json.loads(raw.strip())
-
-
-# ── PDF text extractor ────────────────────────────────────────────────────────
-def extract_pdf_text(uploaded_file, max_chars=3000):
-    """
-    Extracts plain text from an uploaded PDF file.
-    Truncates to max_chars to stay within Groq token limits.
-    Returns (text, page_count, success).
-    """
-    try:
-        pdf_bytes = uploaded_file.read()
-        doc       = fitz.open(stream=pdf_bytes, filetype="pdf")
-        text      = ""
-        for page in doc:
-            text += page.get_text()
-            if len(text) >= max_chars:
-                break
-        doc.close()
-        return text[:max_chars], len(doc), True
-    except Exception as e:
-        return "", 0, False
-
-def ai_extract_device_info(pdf_text):
-    """
-    Sends extracted PDF text to Groq and asks it to identify:
-    - device name
-    - intended use
-    - description
-    Returns a dict with those 3 fields.
-    """
-    prompt = f"""You are a medical device regulatory expert.
-Read this device document text and extract key information.
-Return ONLY valid JSON, nothing else.
-
-Document text:
-{pdf_text}
-
-Return exactly this JSON:
-{{
-  "device_name": "the medical device name (be specific, e.g. Drug-Eluting Coronary Stent)",
-  "intended_use": "one sentence clinical intended use",
-  "description": "2-3 sentence technical description suitable for regulatory classification",
-  "device_type_hint": "most likely device category e.g. implant/diagnostic/therapeutic/monitoring",
-  "confidence": "High/Medium/Low"
-}}
-Return ONLY the JSON."""
-
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role":"user","content":prompt}],
-        temperature=0.1,
-        max_tokens=400,
-    )
-    raw = response.choices[0].message.content.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"): raw = raw[4:]
-    return json.loads(raw.strip())
-
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## Regulatory Navigator")
@@ -736,18 +638,19 @@ with st.sidebar:
                "Infusion Pump","MRI Scanner","HIV Test Kit","Glucose Meter",
                "Bone Implant","Total Knee Replacement","Total Hip Replacement",
                "Coronary Stent","Drug-Eluting Stent"])
+
     if input_mode == "Type any device name":
 
-        # ── PDF auto-fill uploader ────────────────────────────────────────────
+        # PDF auto-fill expander
         with st.expander("Upload device datasheet PDF (auto-fill)", expanded=False):
             uploaded_pdf = st.file_uploader(
                 "Upload PDF", type=["pdf"],
-                help="Upload any device spec sheet, IFU, or datasheet. "
-                     "The AI will extract the device name and description automatically.",
-                label_visibility="collapsed"
+                label_visibility="collapsed",
+                help="Upload any device spec sheet or IFU. "
+                     "AI extracts the device name and description automatically."
             )
             if uploaded_pdf is not None:
-                with st.spinner("Reading PDF and extracting device info..."):
+                with st.spinner("Reading PDF..."):
                     pdf_text, page_count, success = extract_pdf_text(uploaded_pdf)
                 if success and pdf_text.strip():
                     try:
@@ -757,64 +660,52 @@ with st.sidebar:
                             extracted.get("intended_use","") + " " +
                             extracted.get("description","")
                         ).strip()
-                        st.session_state["pdf_confidence"]  = extracted.get("confidence","Medium")
-                        conf_color = {"High":"green","Medium":"orange","Low":"red"}
                         conf = extracted.get("confidence","Medium")
-                        st.success(f"Extracted from {page_count} page PDF")
+                        conf_color = {"High":"green","Medium":"orange","Low":"red"}
+                        st.success(f"Extracted from {page_count}-page PDF")
                         st.markdown(
-                            f"**Device:** {extracted.get('device_name','')}  "
-                            f"| Confidence: :{conf_color.get(conf,'orange')}[**{conf}**]"
+                            f"**{extracted.get('device_name','')}**  "
+                            f"| :{conf_color.get(conf,'orange')}[{conf} confidence]"
                         )
                         st.caption(extracted.get("intended_use",""))
                     except Exception as e:
-                        st.warning(f"Could not parse PDF content: {e}")
+                        st.warning(f"Could not parse: {e}")
                 else:
-                    st.warning("Could not extract text from this PDF. Try a text-based PDF rather than a scanned image.")
-
-        # Pre-fill from PDF extraction if available
-        _pdf_name = st.session_state.get("pdf_device_name","")
-        _pdf_desc = st.session_state.get("pdf_device_desc","")
+                    st.warning("No text found. Use a text-based PDF, not a scanned image.")
 
         device_name = st.text_input(
             "Device name",
-            value=_pdf_name,
+            value=st.session_state.get("pdf_device_name",""),
             placeholder="e.g. Coronary Stent or upload PDF above"
         )
         device_desc = st.text_area(
             "Description (optional)",
-            value=_pdf_desc,
+            value=st.session_state.get("pdf_device_desc",""),
             height=80
         )
-
-        # Clear PDF pre-fill after user has seen it
-        if _pdf_name:
+        if st.session_state.get("pdf_device_name"):
             if st.button("Clear PDF data", key="clear_pdf"):
-                st.session_state.pop("pdf_device_name", None)
-                st.session_state.pop("pdf_device_desc", None)
-                st.session_state.pop("pdf_confidence",  None)
+                st.session_state["pdf_device_name"] = ""
+                st.session_state["pdf_device_desc"] = ""
                 st.rerun()
 
-        device_name2 = st.text_input("Device 2",placeholder="e.g. Pacemaker") \
-                        if compare_mode else ""
-        device_desc2 = st.text_area("Description 2 (optional)",height=60) \
-                        if compare_mode else ""
+        if compare_mode:
+            device_name2 = st.text_input("Device 2",placeholder="e.g. Pacemaker")
+            device_desc2 = st.text_area("Description 2 (optional)",height=60)
+        else:
+            device_name2 = ""
+            device_desc2 = ""
+
     else:
         device_name  = st.selectbox("Device 1",presets)
         device_desc  = ""
-        device_name2 = st.selectbox("Device 2",presets,index=1) \
-                        if compare_mode else ""
-        device_desc2 = ""
-    else:
-        device_name  = st.selectbox("Device 1",presets)
-        device_desc  = ""
-        device_name2 = st.selectbox("Device 2",presets,index=1) \
-                        if compare_mode else ""
-        device_desc2 = ""
-    else:
-        device_name  = st.selectbox("Device 1",presets)
-        device_desc  = ""
-        device_name2 = st.selectbox("Device 2",presets,index=1)                         if compare_mode else ""
-        device_desc2 = ""
+        if compare_mode:
+            device_name2 = st.selectbox("Device 2",presets,index=1)
+            device_desc2 = ""
+        else:
+            device_name2 = ""
+            device_desc2 = ""
+
     st.subheader("Target markets")
     cols_sb = st.columns(2)
     checks = {
@@ -829,6 +720,7 @@ with st.sidebar:
     selected_fws = [fw for fw,checked in checks.items() if checked]
     st.divider()
     analyse = st.button("Analyse Device",type="primary",use_container_width=True)
+
     if st.session_state.search_history:
         st.divider(); st.subheader("History")
         for i,h in enumerate(reversed(st.session_state.search_history[-5:])):
@@ -849,12 +741,7 @@ st.markdown("## MedTech Regulatory Pathway Navigator")
 st.markdown("*AI-powered classification across 7 global regulatory frameworks*")
 st.divider()
 
-# ═════════════════════════════════════════════════════════════════════════════
-# CHATBOT QUEUE PROCESSOR — Pure Python, zero st.* calls
-# _queued_question  : the question text
-# _queued_device    : snapshot of device data taken when question was queued
-# Both stored together so processor never depends on current_device timing
-# ═════════════════════════════════════════════════════════════════════════════
+# ── CHATBOT QUEUE PROCESSOR — pure Python, zero st.* calls ───────────────────
 if st.session_state.get("_queued_question") and st.session_state.get("_queued_device"):
     _q   = st.session_state["_queued_question"]
     _ctx = st.session_state["_queued_device"]
@@ -863,24 +750,9 @@ if st.session_state.get("_queued_question") and st.session_state.get("_queued_de
     try:
         _answer = regulatory_chat(str(_q), _ctx)
     except Exception as _err:
-        _answer = f"Error getting response: {str(_err)}"
+        _answer = f"Error: {str(_err)}"
     st.session_state["chat_history"].append({"question":str(_q),"answer":_answer})
     st.session_state["chat_input_counter"] += 1
-# ═════════════════════════════════════════════════════════════════════════════
-_pending = st.session_state.get("_queued_question")
-if _pending:
-    st.session_state["_queued_question"] = None          # clear immediately
-    _device_ctx = st.session_state.get("current_device")
-    if _device_ctx and str(_pending).strip():
-        try:
-            _answer = regulatory_chat(str(_pending), _device_ctx)
-        except Exception as _err:
-            _answer = f"Error: {str(_err)}"
-        st.session_state["chat_history"].append(
-            {"question": str(_pending), "answer": _answer}
-        )
-        st.session_state["chat_input_counter"] += 1
-# ═════════════════════════════════════════════════════════════════════════════
 
 # ── Load classification data ──────────────────────────────────────────────────
 if "reload_data" in st.session_state:
@@ -889,6 +761,8 @@ if "reload_data" in st.session_state:
     st.session_state["last_data2"]=None
     st.session_state["last_fws"]=selected_fws
     st.session_state["last_compare"]=False
+    st.session_state["current_device"]=data
+    st.session_state["chat_history"]=[]
 elif analyse and device_name.strip():
     analyse_show=True
     with st.spinner(f"Classifying {device_name}..."):
@@ -905,14 +779,10 @@ elif analyse and device_name.strip():
                 st.error(f"Device 2 failed: {e}"); data2=None
     st.session_state["chat_history"]=[]
     st.session_state["current_device"]=data
-    st.session_state["last_data"]    = data
-    st.session_state["last_data2"]   = data2
-    st.session_state["last_fws"]     = list(selected_fws)
-    st.session_state["last_compare"] = bool(compare_mode and data2 is not None)
     st.session_state["last_data"]=data
     st.session_state["last_data2"]=data2
-    st.session_state["last_fws"]=selected_fws
-    st.session_state["last_compare"]=compare_mode and data2 is not None
+    st.session_state["last_fws"]=list(selected_fws)
+    st.session_state["last_compare"]=bool(compare_mode and data2 is not None)
     st.session_state.search_history.append({
         "device":data["device_name"],"confidence":data.get("confidence","--"),
         "cdsco_class":data["cdsco"]["risk_class"],
@@ -921,14 +791,15 @@ elif analyse and device_name.strip():
     })
 elif analyse and not device_name.strip():
     st.warning("Please enter a device name first.")
-    analyse_show=False; data=None; data2=None
+    data=st.session_state.get("last_data")
+    data2=st.session_state.get("last_data2")
+    selected_fws=st.session_state.get("last_fws") or selected_fws
+    analyse_show=data is not None
 else:
-    # Not a fresh classification — restore from session state
-    # This keeps results visible when chat buttons trigger reruns
-    data         = st.session_state.get("last_data")
-    data2        = st.session_state.get("last_data2")
-    selected_fws = st.session_state.get("last_fws") or selected_fws
-    analyse_show = data is not None
+    data=st.session_state.get("last_data")
+    data2=st.session_state.get("last_data2")
+    selected_fws=st.session_state.get("last_fws") or selected_fws
+    analyse_show=data is not None
 
 # ── Results ───────────────────────────────────────────────────────────────────
 if analyse_show and data:
@@ -1002,12 +873,9 @@ if analyse_show and data:
 
     st.divider()
 
-    # ── CHATBOT UI ────────────────────────────────────────────────────────────
+    # ── CHATBOT ───────────────────────────────────────────────────────────────
     st.subheader("Ask the regulatory AI")
-    st.caption(
-        f"Context-aware Q&A about **{data['device_name']}**. "
-        "Knows the full classification above."
-    )
+    st.caption(f"Context-aware Q&A about **{data['device_name']}**")
 
     suggestions = [
         "What documents do I need to prepare first?",
@@ -1067,9 +935,10 @@ else:
     st.markdown("""
     ### How to use
     1. Type any medical device name in the sidebar
-    2. Select your target markets
-    3. Click **Analyse Device**
-    4. Ask follow-up questions in the Q&A panel below
+    2. Or upload a device PDF to auto-fill the form
+    3. Select your target markets
+    4. Click **Analyse Device**
+    5. Ask follow-up questions in the Q&A panel below
 
     #### 7 frameworks covered
     | Market | Framework | Classes |
@@ -1085,5 +954,5 @@ else:
     #### Try these
     - Coronary Stent - Total Knee Replacement
     - Smart insulin pen - AI retinal scanner
-    - Pacemaker - Robotic surgical arm
+    - Upload a device spec sheet PDF to auto-classify
     """)
