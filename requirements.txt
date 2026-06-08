@@ -4,3 +4,4 @@ plotly
 openpyxl
 groq
 fpdf2
+pymupdf
