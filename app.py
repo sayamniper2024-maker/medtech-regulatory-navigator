@@ -4,7 +4,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from groq import Groq
 from fpdf import FPDF
-import json, os
+import json, os, io
+import fitz  # PyMuPDF
 
 st.set_page_config(page_title="MedTech Regulatory Navigator", page_icon="🧬", layout="wide")
 
@@ -18,13 +19,14 @@ for _k, _v in {
     "current_device"     : None,
     "chat_input_counter" : 0,
     "_queued_question"   : None,
+    "pdf_device_name"    : "",
+    "pdf_device_desc"    : "",
+    "pdf_confidence"     : "",
     "_queued_device"     : None,
     "last_data"          : None,
     "last_data2"         : None,
     "last_fws"           : [],
     "last_compare"       : False,
-    "_queued_device"     : None,
-    "_queued_device"     : None,
     "_queued_device"     : None,
 }.items():
     if _k not in st.session_state:
@@ -601,6 +603,64 @@ def generate_pdf(data, selected_fws, data2=None, selected_fws2=None):
         "Verify with a qualified regulatory affairs professional.",align="C")
     return bytes(pdf.output())
 
+
+# ── PDF text extractor ────────────────────────────────────────────────────────
+def extract_pdf_text(uploaded_file, max_chars=3000):
+    """
+    Extracts plain text from an uploaded PDF file.
+    Truncates to max_chars to stay within Groq token limits.
+    Returns (text, page_count, success).
+    """
+    try:
+        pdf_bytes = uploaded_file.read()
+        doc       = fitz.open(stream=pdf_bytes, filetype="pdf")
+        text      = ""
+        for page in doc:
+            text += page.get_text()
+            if len(text) >= max_chars:
+                break
+        doc.close()
+        return text[:max_chars], len(doc), True
+    except Exception as e:
+        return "", 0, False
+
+def ai_extract_device_info(pdf_text):
+    """
+    Sends extracted PDF text to Groq and asks it to identify:
+    - device name
+    - intended use
+    - description
+    Returns a dict with those 3 fields.
+    """
+    prompt = f"""You are a medical device regulatory expert.
+Read this device document text and extract key information.
+Return ONLY valid JSON, nothing else.
+
+Document text:
+{pdf_text}
+
+Return exactly this JSON:
+{{
+  "device_name": "the medical device name (be specific, e.g. Drug-Eluting Coronary Stent)",
+  "intended_use": "one sentence clinical intended use",
+  "description": "2-3 sentence technical description suitable for regulatory classification",
+  "device_type_hint": "most likely device category e.g. implant/diagnostic/therapeutic/monitoring",
+  "confidence": "High/Medium/Low"
+}}
+Return ONLY the JSON."""
+
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role":"user","content":prompt}],
+        temperature=0.1,
+        max_tokens=400,
+    )
+    raw = response.choices[0].message.content.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"): raw = raw[4:]
+    return json.loads(raw.strip())
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## Regulatory Navigator")
@@ -615,10 +675,73 @@ with st.sidebar:
                "Bone Implant","Total Knee Replacement","Total Hip Replacement",
                "Coronary Stent","Drug-Eluting Stent"])
     if input_mode == "Type any device name":
-        device_name  = st.text_input("Device name",placeholder="e.g. Coronary Stent")
-        device_desc  = st.text_area("Description (optional)",height=60)
-        device_name2 = st.text_input("Device 2",placeholder="e.g. Pacemaker")                         if compare_mode else ""
-        device_desc2 = st.text_area("Description 2 (optional)",height=60)                         if compare_mode else ""
+
+        # ── PDF auto-fill uploader ────────────────────────────────────────────
+        with st.expander("Upload device datasheet PDF (auto-fill)", expanded=False):
+            uploaded_pdf = st.file_uploader(
+                "Upload PDF", type=["pdf"],
+                help="Upload any device spec sheet, IFU, or datasheet. "
+                     "The AI will extract the device name and description automatically.",
+                label_visibility="collapsed"
+            )
+            if uploaded_pdf is not None:
+                with st.spinner("Reading PDF and extracting device info..."):
+                    pdf_text, page_count, success = extract_pdf_text(uploaded_pdf)
+                if success and pdf_text.strip():
+                    try:
+                        extracted = ai_extract_device_info(pdf_text)
+                        st.session_state["pdf_device_name"] = extracted.get("device_name","")
+                        st.session_state["pdf_device_desc"] = (
+                            extracted.get("intended_use","") + " " +
+                            extracted.get("description","")
+                        ).strip()
+                        st.session_state["pdf_confidence"]  = extracted.get("confidence","Medium")
+                        conf_color = {"High":"green","Medium":"orange","Low":"red"}
+                        conf = extracted.get("confidence","Medium")
+                        st.success(f"Extracted from {page_count} page PDF")
+                        st.markdown(
+                            f"**Device:** {extracted.get('device_name','')}  "
+                            f"| Confidence: :{conf_color.get(conf,'orange')}[**{conf}**]"
+                        )
+                        st.caption(extracted.get("intended_use",""))
+                    except Exception as e:
+                        st.warning(f"Could not parse PDF content: {e}")
+                else:
+                    st.warning("Could not extract text from this PDF. Try a text-based PDF rather than a scanned image.")
+
+        # Pre-fill from PDF extraction if available
+        _pdf_name = st.session_state.get("pdf_device_name","")
+        _pdf_desc = st.session_state.get("pdf_device_desc","")
+
+        device_name = st.text_input(
+            "Device name",
+            value=_pdf_name,
+            placeholder="e.g. Coronary Stent or upload PDF above"
+        )
+        device_desc = st.text_area(
+            "Description (optional)",
+            value=_pdf_desc,
+            height=80
+        )
+
+        # Clear PDF pre-fill after user has seen it
+        if _pdf_name:
+            if st.button("Clear PDF data", key="clear_pdf"):
+                st.session_state.pop("pdf_device_name", None)
+                st.session_state.pop("pdf_device_desc", None)
+                st.session_state.pop("pdf_confidence",  None)
+                st.rerun()
+
+        device_name2 = st.text_input("Device 2",placeholder="e.g. Pacemaker") \
+                        if compare_mode else ""
+        device_desc2 = st.text_area("Description 2 (optional)",height=60) \
+                        if compare_mode else ""
+    else:
+        device_name  = st.selectbox("Device 1",presets)
+        device_desc  = ""
+        device_name2 = st.selectbox("Device 2",presets,index=1) \
+                        if compare_mode else ""
+        device_desc2 = ""
     else:
         device_name  = st.selectbox("Device 1",presets)
         device_desc  = ""
@@ -663,30 +786,6 @@ st.divider()
 # _queued_question  : the question text
 # _queued_device    : snapshot of device data taken when question was queued
 # Both stored together so processor never depends on current_device timing
-# ═════════════════════════════════════════════════════════════════════════════
-if st.session_state.get("_queued_question") and st.session_state.get("_queued_device"):
-    _q   = st.session_state["_queued_question"]
-    _ctx = st.session_state["_queued_device"]
-    st.session_state["_queued_question"] = None
-    st.session_state["_queued_device"]   = None
-    try:
-        _answer = regulatory_chat(str(_q), _ctx)
-    except Exception as _err:
-        _answer = f"Error getting response: {str(_err)}"
-    st.session_state["chat_history"].append({"question":str(_q),"answer":_answer})
-    st.session_state["chat_input_counter"] += 1
-# ═════════════════════════════════════════════════════════════════════════════
-if st.session_state.get("_queued_question") and st.session_state.get("_queued_device"):
-    _q   = st.session_state["_queued_question"]
-    _ctx = st.session_state["_queued_device"]
-    st.session_state["_queued_question"] = None
-    st.session_state["_queued_device"]   = None
-    try:
-        _answer = regulatory_chat(str(_q), _ctx)
-    except Exception as _err:
-        _answer = f"Error getting response: {str(_err)}"
-    st.session_state["chat_history"].append({"question":str(_q),"answer":_answer})
-    st.session_state["chat_input_counter"] += 1
 # ═════════════════════════════════════════════════════════════════════════════
 if st.session_state.get("_queued_question") and st.session_state.get("_queued_device"):
     _q   = st.session_state["_queued_question"]
