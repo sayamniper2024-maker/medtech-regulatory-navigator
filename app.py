@@ -1006,13 +1006,13 @@ REGULATORY_COSTS = {
         "MD-14" : {"govt_fees":3000,  "testing":15000, "consultant":25000, "qms":10000},
     },
     "fda": {
-        "Exempt"  : {"govt_fees":0,     "testing":5000,  "consultant":8000,  "qms":3000},
-        "510(k)"  : {"govt_fees":21760, "testing":30000, "consultant":50000, "qms":15000},
-        "PMA"     : {"govt_fees":441045,"testing":200000,"consultant":300000,"qms":50000},
+        "Exempt"  : {"govt_fees":0,      "testing":5000,  "consultant":8000,  "qms":3000},
+        "510(k)"  : {"govt_fees":26067,  "testing":40000, "consultant":50000, "qms":15000},
+        "PMA"     : {"govt_fees":579272, "testing":250000,"consultant":350000,"qms":60000},
     },
     "eu": {
-        "Basic UDI-DI"  : {"govt_fees":2000,  "testing":5000,  "consultant":8000,  "qms":3000},
-        "Full Tech File": {"govt_fees":15000, "testing":40000, "consultant":60000, "qms":20000},
+        "Basic UDI-DI"  : {"govt_fees":3000,  "testing":8000,  "consultant":12000, "qms":5000},
+        "Full Tech File": {"govt_fees":25000, "testing":50000, "consultant":80000, "qms":25000},
     },
     "health_canada": {
         "MDEL only"     : {"govt_fees":300,   "testing":2000,  "consultant":4000,  "qms":1000},
@@ -1061,7 +1061,7 @@ def show_cost_estimator(data, selected_fws):
         return
 
     fig = go.Figure()
-    fig.add_trace(go.Bar(name="Government fees", x=fw_labels, y=govt,
+    fig.add_trace(go.Bar(name="Govt / NB fees", x=fw_labels, y=govt,
                          marker_color="#378ADD"))
     fig.add_trace(go.Bar(name="Laboratory testing", x=fw_labels, y=testing,
                          marker_color="#1D9E75"))
@@ -1084,7 +1084,7 @@ def show_cost_estimator(data, selected_fws):
     totals = [g+t+c+q for g,t,c,q in zip(govt,testing,consult,qms_costs)]
     cost_df = pd.DataFrame({
         "Market"           : fw_labels,
-        "Govt fees ($)"    : [f"${v:,.0f}" for v in govt],
+        "Govt/NB fees ($)" : [f"${v:,.0f}" for v in govt],
         "Testing ($)"      : [f"${v:,.0f}" for v in testing],
         "Consultant ($)"   : [f"${v:,.0f}" for v in consult],
         "QMS setup ($)"    : [f"${v:,.0f}" for v in qms_costs],
@@ -1097,237 +1097,16 @@ def show_cost_estimator(data, selected_fws):
     c1,c2 = st.columns(2)
     c1.success(f"Most affordable: **{cheapest}** (~${min(totals):,.0f})")
     c2.warning(f"Highest cost:    **{costliest}** (~${max(totals):,.0f})")
-    st.caption(
-        "Costs are approximate estimates for planning purposes only. "
-        "FDA PMA fees shown are FY2024 standard fees. "
-        "Consultant fees vary widely by firm and device complexity."
-    )
-
-# ── TRACK 5: GANTT CHART ──────────────────────────────────────────────────────
-def show_gantt_chart(data, selected_fws):
-    import datetime
-    st.subheader("Regulatory submission timeline")
-    st.caption(
-        "Estimated project Gantt chart from submission start to market approval. "
-        "Milestones are illustrative — actual timelines depend on agency workload and submission quality."
-    )
-
-    start_date = datetime.date.today()
-    gantt_rows = []
-
-    MILESTONES = {
-        "cdsco": [
-            ("Dossier preparation",      0,   3),
-            ("CDSCO submission",         3,   1),
-            ("Query response",           4,   2),
-            ("Approval",                 6,   1),
-        ],
-        "fda": {
-            "Exempt"  : [("Device labeling",0,1),("Registration",1,1),("Approval",2,1)],
-            "510(k)"  : [("Dossier prep",0,4),("510k submission",4,1),("FDA review",5,3),("Clearance",8,1)],
-            "PMA"     : [("IDE study",0,12),("PMA dossier",12,6),("PMA submission",18,1),("FDA review",19,12),("Approval",31,1)],
-        },
-        "eu": {
-            "Basic UDI-DI"  : [("Tech file",0,2),("UDI registration",2,1),("CE Mark",3,1)],
-            "Full Tech File": [("Tech file prep",0,6),("Notified Body audit",6,3),("Review",9,3),("CE Certificate",12,1)],
-        },
-        "health_canada": [
-            ("Application prep",  0,  3),
-            ("HC submission",     3,  1),
-            ("HC review",         4,  5),
-            ("Licence issued",    9,  1),
-        ],
-        "japan": {
-            "Notification" : [("STED prep",0,2),("Notification",2,1),("Registration",3,1)],
-            "Certification": [("STED prep",0,3),("Certification body",3,4),("Certificate",7,1)],
-            "Approval"     : [("STED prep",0,6),("PMDA consultation",6,3),("Approval application",9,1),("PMDA review",10,12),("Approval",22,1)],
-        },
-        "australia": {
-            "Self-assessment"      : [("Essential principles",0,2),("ARTG application",2,1),("ARTG listing",3,1)],
-            "Conformity assessment": [("Tech file",0,4),("TGA audit",4,3),("ARTG inclusion",7,3),("Listed",10,1)],
-        },
-        "russia": {
-            "Simplified registration (RZN)": [("RU REP appointment",0,1),("Local testing",1,3),("RZN application",4,1),("Registration",5,3)],
-            "Full registration (RZN)"      : [("RU REP appointment",0,1),("ISO 13485",1,2),("Local testing",3,3),("Clinical data",6,3),("RZN application",9,1),("Roszdravnadzor review",10,6),("RZN certificate",16,1)],
-            "EAEU registration"            : [("RU REP appointment",0,1),("Tech dossier",1,3),("EAEU submission",4,1),("Review",5,8),("EAEU certificate",13,1)],
-        },
-    }
-
-    colors = {
-        "cdsco":"#1D9E75","fda":"#378ADD","eu":"#D85A30",
-        "health_canada":"#C0392B","japan":"#8E44AD",
-        "australia":"#E67E22","russia":"#2C3E8C",
-    }
-
-    for fw in selected_fws:
-        pathway    = data[fw].get(PATHWAY_KEY.get(fw,""),"")
-        ms_data    = MILESTONES.get(fw,[])
-        if isinstance(ms_data, dict):
-            milestones = ms_data.get(pathway, list(ms_data.values())[0])
-        else:
-            milestones = ms_data
-
-        for (task, offset_months, duration_months) in milestones:
-            s = start_date + datetime.timedelta(days=int(offset_months*30.4))
-            e = s + datetime.timedelta(days=max(1,int(duration_months*30.4)))
-            gantt_rows.append({
-                "Framework": FRAMEWORKS[fw]["label"],
-                "Task"     : task,
-                "Start"    : s.strftime("%Y-%m-%d"),
-                "Finish"   : e.strftime("%Y-%m-%d"),
-                "Color"    : colors.get(fw,"#888"),
-            })
-
-    if not gantt_rows:
-        st.info("No timeline data available.")
-        return
-
-    df_gantt = pd.DataFrame(gantt_rows)
-    import plotly.express as px
-    fig = px.timeline(
-        df_gantt,
-        x_start="Start",
-        x_end="Finish",
-        y="Framework",
-        color="Framework",
-        hover_data=["Task"],
-        color_discrete_map={FRAMEWORKS[fw]["label"]:colors[fw] for fw in selected_fws},
-    )
-    fig.update_yaxes(autorange="reversed")
-    fig.update_layout(
-        plot_bgcolor="white",
-        height=max(300, len(selected_fws)*80),
-        margin=dict(t=30,b=20,l=150),
-        xaxis=dict(gridcolor="#f0f0f0"),
-        showlegend=False,
-    )
-    st.plotly_chart(fig, use_container_width=True, key="gantt_chart")
-
-    # Milestone table
-    st.markdown("**Key milestones**")
-    mil_rows = []
-    for fw in selected_fws:
-        pathway    = data[fw].get(PATHWAY_KEY.get(fw,""),"")
-        ms_data    = MILESTONES.get(fw,[])
-        if isinstance(ms_data, dict):
-            milestones = ms_data.get(pathway, list(ms_data.values())[0])
-        else:
-            milestones = ms_data
-        for (task, offset, duration) in milestones:
-            mil_date = start_date + datetime.timedelta(days=int(offset*30.4))
-            mil_rows.append({
-                "Market"   : FRAMEWORKS[fw]["label"],
-                "Milestone": task,
-                "Month"    : f"Month {offset+1}",
-                "Est. date": mil_date.strftime("%b %Y"),
-            })
-    st.dataframe(pd.DataFrame(mil_rows), use_container_width=True, hide_index=True)
-
-
-
-# ── TRACK 5: COST ESTIMATOR ───────────────────────────────────────────────────
-REGULATORY_COSTS = {
-    "cdsco": {
-        "MD-5"  : {"govt_fees":500,   "testing":3000,  "consultant":5000,  "qms":2000},
-        "MD-9"  : {"govt_fees":1500,  "testing":8000,  "consultant":12000, "qms":5000},
-        "MD-14" : {"govt_fees":3000,  "testing":15000, "consultant":25000, "qms":10000},
-    },
-    "fda": {
-        "Exempt"  : {"govt_fees":0,     "testing":5000,  "consultant":8000,  "qms":3000},
-        "510(k)"  : {"govt_fees":21760, "testing":30000, "consultant":50000, "qms":15000},
-        "PMA"     : {"govt_fees":441045,"testing":200000,"consultant":300000,"qms":50000},
-    },
-    "eu": {
-        "Basic UDI-DI"  : {"govt_fees":2000,  "testing":5000,  "consultant":8000,  "qms":3000},
-        "Full Tech File": {"govt_fees":15000, "testing":40000, "consultant":60000, "qms":20000},
-    },
-    "health_canada": {
-        "MDEL only"     : {"govt_fees":300,   "testing":2000,  "consultant":4000,  "qms":1000},
-        "Device Licence": {"govt_fees":5000,  "testing":20000, "consultant":30000, "qms":10000},
-    },
-    "japan": {
-        "Notification" : {"govt_fees":2000,  "testing":10000, "consultant":15000, "qms":5000},
-        "Certification": {"govt_fees":8000,  "testing":25000, "consultant":40000, "qms":12000},
-        "Approval"     : {"govt_fees":25000, "testing":80000, "consultant":120000,"qms":30000},
-    },
-    "australia": {
-        "Self-assessment"      : {"govt_fees":900,   "testing":5000,  "consultant":8000,  "qms":3000},
-        "Conformity assessment": {"govt_fees":3500,  "testing":20000, "consultant":35000, "qms":12000},
-    },
-    "russia": {
-        "Simplified registration (RZN)": {"govt_fees":2000,  "testing":8000,  "consultant":12000, "qms":3000},
-        "Full registration (RZN)"      : {"govt_fees":6000,  "testing":25000, "consultant":40000, "qms":12000},
-        "EAEU registration"            : {"govt_fees":8000,  "testing":30000, "consultant":50000, "qms":15000},
-    },
-}
-
-def show_cost_estimator(data, selected_fws):
-    st.subheader("Regulatory cost estimator")
-    st.caption(
-        "Approximate costs in USD across selected markets. "
-        "Includes government fees, laboratory testing, consultant fees, and QMS setup. "
-        "Actual costs vary significantly by device complexity and local requirements."
-    )
-
-    fw_labels, govt, testing, consult, qms_costs = [], [], [], [], []
-
-    for fw in selected_fws:
-        pathway   = data[fw].get(PATHWAY_KEY.get(fw,""),"")
-        fw_costs  = REGULATORY_COSTS.get(fw,{})
-        costs     = fw_costs.get(pathway, list(fw_costs.values())[0] if fw_costs else {})
-        if not costs: continue
-
-        fw_labels.append(FRAMEWORKS[fw]["label"])
-        govt.append(costs.get("govt_fees",0))
-        testing.append(costs.get("testing",0))
-        consult.append(costs.get("consultant",0))
-        qms_costs.append(costs.get("qms",0))
-
-    if not fw_labels:
-        st.info("No cost data available for selected frameworks.")
-        return
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(name="Government fees", x=fw_labels, y=govt,
-                         marker_color="#378ADD"))
-    fig.add_trace(go.Bar(name="Laboratory testing", x=fw_labels, y=testing,
-                         marker_color="#1D9E75"))
-    fig.add_trace(go.Bar(name="Consultant fees", x=fw_labels, y=consult,
-                         marker_color="#8E44AD"))
-    fig.add_trace(go.Bar(name="QMS setup", x=fw_labels, y=qms_costs,
-                         marker_color="#E67E22"))
-    fig.update_layout(
-        barmode="stack",
-        yaxis_title="Estimated cost (USD)",
-        plot_bgcolor="white",
-        height=400,
-        margin=dict(t=30,b=20),
-        yaxis=dict(gridcolor="#f0f0f0",tickformat="$,.0f"),
-        legend=dict(orientation="h",yanchor="bottom",y=1.02,xanchor="right",x=1),
-    )
-    st.plotly_chart(fig, use_container_width=True, key="cost_chart")
-
-    # Summary table
-    totals = [g+t+c+q for g,t,c,q in zip(govt,testing,consult,qms_costs)]
-    cost_df = pd.DataFrame({
-        "Market"           : fw_labels,
-        "Govt fees ($)"    : [f"${v:,.0f}" for v in govt],
-        "Testing ($)"      : [f"${v:,.0f}" for v in testing],
-        "Consultant ($)"   : [f"${v:,.0f}" for v in consult],
-        "QMS setup ($)"    : [f"${v:,.0f}" for v in qms_costs],
-        "Total estimate ($)": [f"${v:,.0f}" for v in totals],
-    })
-    st.dataframe(cost_df, use_container_width=True, hide_index=True)
-
-    cheapest = fw_labels[totals.index(min(totals))]
-    costliest = fw_labels[totals.index(max(totals))]
-    c1,c2 = st.columns(2)
-    c1.success(f"Most affordable: **{cheapest}** (~${min(totals):,.0f})")
-    c2.warning(f"Highest cost:    **{costliest}** (~${max(totals):,.0f})")
-    st.caption(
-        "Costs are approximate estimates for planning purposes only. "
-        "FDA PMA fees shown are FY2024 standard fees. "
-        "Consultant fees vary widely by firm and device complexity."
+    st.warning(
+        "**Cost disclaimer:** All figures are approximate indicative ranges for "
+        "budget planning only. **FDA government fees are FY2026 standard rates** "
+        "($26,067 for 510k; $579,272 for PMA — small businesses may qualify for "
+        "75% reduction). **EU figures represent Notified Body fees** (not government "
+        "fees — EU has no central regulatory fee). Consultant and testing costs vary "
+        "widely by device complexity, geography, and firm. Do not use these figures "
+        "for financial commitments. Always obtain formal quotes from regulatory "
+        "consultants and testing laboratories.",
+        icon="⚠️"
     )
 
 # ── TRACK 5: GANTT CHART ──────────────────────────────────────────────────────
