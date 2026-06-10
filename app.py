@@ -1484,7 +1484,7 @@ if analyse_show and data:
     # ── Gantt chart ───────────────────────────────────────────────────────────
     show_gantt_chart(data, selected_fws)
 
-    st.warning(
+    st.warning()
     st.divider()
 
     # ── CHATBOT ───────────────────────────────────────────────────────────────
@@ -1536,7 +1536,7 @@ if analyse_show and data:
         st.info("Click a quick question or type your own and press Send.")
 
     st.divider()
-    st.warning(
+    st.warning()
     st.divider()
         "**Disclaimer:** For educational and preliminary scoping purposes only. "
         "AI-generated based on CDSCO MDR 2017 | FDA 21 CFR | EU MDR 2017/745 | "
