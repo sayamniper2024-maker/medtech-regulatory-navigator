@@ -1471,6 +1471,20 @@ if analyse_show and data:
         with ex2:
             st.caption(f"Full pathway -- {len(selected_fws)} markets, all details.")
 
+    # ── Gap analysis ──────────────────────────────────────────────────────────
+    show_gap_analysis_ui(data, selected_fws)
+
+    st.divider()
+
+    # ── Cost estimator ────────────────────────────────────────────────────────
+    show_cost_estimator(data, selected_fws)
+
+    st.divider()
+
+    # ── Gantt chart ───────────────────────────────────────────────────────────
+    show_gantt_chart(data, selected_fws)
+
+    st.warning(
     st.divider()
 
     # ── CHATBOT ───────────────────────────────────────────────────────────────
@@ -1522,22 +1536,8 @@ if analyse_show and data:
         st.info("Click a quick question or type your own and press Send.")
 
     st.divider()
-
-    # ── Gap analysis ──────────────────────────────────────────────────────────
-    show_gap_analysis_ui(data, selected_fws)
-
-    st.divider()
-
-    # ── Cost estimator ────────────────────────────────────────────────────────
-    show_cost_estimator(data, selected_fws)
-
-    st.divider()
-
-    # ── Gantt chart ───────────────────────────────────────────────────────────
-    show_gantt_chart(data, selected_fws)
-
-    st.divider()
     st.warning(
+    st.divider()
         "**Disclaimer:** For educational and preliminary scoping purposes only. "
         "AI-generated based on CDSCO MDR 2017 | FDA 21 CFR | EU MDR 2017/745 | "
         "Health Canada SOR/98-282 | Japan PMD Act | Australia TGO 2002 | "
