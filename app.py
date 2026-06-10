@@ -1006,13 +1006,13 @@ REGULATORY_COSTS = {
         "MD-14" : {"govt_fees":3000,  "testing":15000, "consultant":25000, "qms":10000},
     },
     "fda": {
-        "Exempt"  : {"govt_fees":0,     "testing":5000,  "consultant":8000,  "qms":3000},
-        "510(k)"  : {"govt_fees":21760, "testing":30000, "consultant":50000, "qms":15000},
-        "PMA"     : {"govt_fees":441045,"testing":200000,"consultant":300000,"qms":50000},
+        "Exempt"  : {"govt_fees":0,      "testing":5000,  "consultant":8000,  "qms":3000},
+        "510(k)"  : {"govt_fees":26067,  "testing":40000, "consultant":50000, "qms":15000},
+        "PMA"     : {"govt_fees":579272, "testing":250000,"consultant":350000,"qms":60000},
     },
     "eu": {
-        "Basic UDI-DI"  : {"govt_fees":2000,  "testing":5000,  "consultant":8000,  "qms":3000},
-        "Full Tech File": {"govt_fees":15000, "testing":40000, "consultant":60000, "qms":20000},
+        "Basic UDI-DI"  : {"govt_fees":3000,  "testing":8000,  "consultant":12000, "qms":5000},
+        "Full Tech File": {"govt_fees":25000, "testing":50000, "consultant":80000, "qms":25000},
     },
     "health_canada": {
         "MDEL only"     : {"govt_fees":300,   "testing":2000,  "consultant":4000,  "qms":1000},
@@ -1061,7 +1061,7 @@ def show_cost_estimator(data, selected_fws):
         return
 
     fig = go.Figure()
-    fig.add_trace(go.Bar(name="Government fees", x=fw_labels, y=govt,
+    fig.add_trace(go.Bar(name="Govt / NB fees", x=fw_labels, y=govt,
                          marker_color="#378ADD"))
     fig.add_trace(go.Bar(name="Laboratory testing", x=fw_labels, y=testing,
                          marker_color="#1D9E75"))
@@ -1084,7 +1084,7 @@ def show_cost_estimator(data, selected_fws):
     totals = [g+t+c+q for g,t,c,q in zip(govt,testing,consult,qms_costs)]
     cost_df = pd.DataFrame({
         "Market"           : fw_labels,
-        "Govt fees ($)"    : [f"${v:,.0f}" for v in govt],
+        "Govt/NB fees ($)" : [f"${v:,.0f}" for v in govt],
         "Testing ($)"      : [f"${v:,.0f}" for v in testing],
         "Consultant ($)"   : [f"${v:,.0f}" for v in consult],
         "QMS setup ($)"    : [f"${v:,.0f}" for v in qms_costs],
@@ -1097,10 +1097,16 @@ def show_cost_estimator(data, selected_fws):
     c1,c2 = st.columns(2)
     c1.success(f"Most affordable: **{cheapest}** (~${min(totals):,.0f})")
     c2.warning(f"Highest cost:    **{costliest}** (~${max(totals):,.0f})")
-    st.caption(
-        "Costs are approximate estimates for planning purposes only. "
-        "FDA PMA fees shown are FY2024 standard fees. "
-        "Consultant fees vary widely by firm and device complexity."
+    st.warning(
+        "**Cost disclaimer:** All figures are approximate indicative ranges for "
+        "budget planning only. **FDA government fees are FY2026 standard rates** "
+        "($26,067 for 510k; $579,272 for PMA — small businesses may qualify for "
+        "75% reduction). **EU figures represent Notified Body fees** (not government "
+        "fees — EU has no central regulatory fee). Consultant and testing costs vary "
+        "widely by device complexity, geography, and firm. Do not use these figures "
+        "for financial commitments. Always obtain formal quotes from regulatory "
+        "consultants and testing laboratories.",
+        icon="⚠️"
     )
 
 # ── TRACK 5: GANTT CHART ──────────────────────────────────────────────────────
@@ -1471,20 +1477,6 @@ if analyse_show and data:
         with ex2:
             st.caption(f"Full pathway -- {len(selected_fws)} markets, all details.")
 
-    # ── Gap analysis ──────────────────────────────────────────────────────────
-    show_gap_analysis_ui(data, selected_fws)
-
-    st.divider()
-
-    # ── Cost estimator ────────────────────────────────────────────────────────
-    show_cost_estimator(data, selected_fws)
-
-    st.divider()
-
-    # ── Gantt chart ───────────────────────────────────────────────────────────
-    show_gantt_chart(data, selected_fws)
-
-    st.warning()
     st.divider()
 
     # ── CHATBOT ───────────────────────────────────────────────────────────────
@@ -1536,14 +1528,28 @@ if analyse_show and data:
         st.info("Click a quick question or type your own and press Send.")
 
     st.divider()
-    st.warning()
+
+    # ── Gap analysis ──────────────────────────────────────────────────────────
+    show_gap_analysis_ui(data, selected_fws)
+
     st.divider()
-    "**Disclaimer:** For educational and preliminary scoping purposes only. "
-    "AI-generated based on CDSCO MDR 2017 | FDA 21 CFR | EU MDR 2017/745 | "
-    "Health Canada SOR/98-282 | Japan PMD Act | Australia TGO 2002 | "
-    "Russia Roszdravnadzor Decree No.1684. "
-    "Always verify with a qualified regulatory affairs professional.",
-    icon="⚠️"
+
+    # ── Cost estimator ────────────────────────────────────────────────────────
+    show_cost_estimator(data, selected_fws)
+
+    st.divider()
+
+    # ── Gantt chart ───────────────────────────────────────────────────────────
+    show_gantt_chart(data, selected_fws)
+
+    st.divider()
+    st.warning(
+        "**Disclaimer:** For educational and preliminary scoping purposes only. "
+        "AI-generated based on CDSCO MDR 2017 | FDA 21 CFR | EU MDR 2017/745 | "
+        "Health Canada SOR/98-282 | Japan PMD Act | Australia TGO 2002 | "
+        "Russia Roszdravnadzor Decree No.1684. "
+        "Always verify with a qualified regulatory affairs professional.",
+        icon="⚠️"
     )
 
 else:
