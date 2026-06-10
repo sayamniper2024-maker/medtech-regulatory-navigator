@@ -1538,12 +1538,12 @@ if analyse_show and data:
     st.divider()
     st.warning()
     st.divider()
-        "**Disclaimer:** For educational and preliminary scoping purposes only. "
-        "AI-generated based on CDSCO MDR 2017 | FDA 21 CFR | EU MDR 2017/745 | "
-        "Health Canada SOR/98-282 | Japan PMD Act | Australia TGO 2002 | "
-        "Russia Roszdravnadzor Decree No.1684. "
-        "Always verify with a qualified regulatory affairs professional.",
-        icon="⚠️"
+    "**Disclaimer:** For educational and preliminary scoping purposes only. "
+    "AI-generated based on CDSCO MDR 2017 | FDA 21 CFR | EU MDR 2017/745 | "
+    "Health Canada SOR/98-282 | Japan PMD Act | Australia TGO 2002 | "
+    "Russia Roszdravnadzor Decree No.1684. "
+    "Always verify with a qualified regulatory affairs professional.",
+    icon="⚠️"
     )
 
 else:
