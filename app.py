@@ -1484,7 +1484,7 @@ if analyse_show and data:
     # ── Gantt chart ───────────────────────────────────────────────────────────
     show_gantt_chart(data, selected_fws)
 
-    st.warning(
+    st.warning()
     st.divider()
 
     # ── CHATBOT ───────────────────────────────────────────────────────────────
