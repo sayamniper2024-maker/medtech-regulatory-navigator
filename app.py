@@ -28,6 +28,8 @@ for _k, _v in {
     "pdf_device_name"    : "",
     "pdf_device_desc"    : "",
     "gap_result"         : None,
+    "feedback_log"       : [],
+    "news_cache"         : {},
 }.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
@@ -979,6 +981,124 @@ def show_device_results(data, selected_fws, prefix=""):
         ]
     st.dataframe(pd.DataFrame(summary),use_container_width=True,hide_index=True)
 
+
+# ── TRACK 6: FEEDBACK LOOP ────────────────────────────────────────────────────
+def show_feedback_ui(data, selected_fws):
+    """Thumbs up/down on classification accuracy. Stores in session log."""
+    st.subheader("Was this classification accurate?")
+    st.caption("Your feedback helps identify devices that need better classification rules.")
+
+    col_a, col_b, col_c = st.columns([1, 1, 4])
+    device_name = data.get("device_name", "Unknown")
+
+    if col_a.button("Accurate", key="fb_up", type="secondary"):
+        st.session_state["feedback_log"].append({
+            "device"     : device_name,
+            "feedback"   : "Accurate",
+            "confidence" : data.get("confidence","--"),
+            "cdsco"      : data["cdsco"].get("risk_class","--"),
+            "fda"        : data["fda"].get("risk_class","--"),
+            "eu"         : data["eu"].get("risk_class","--"),
+        })
+        st.toast("Thanks! Feedback recorded.", icon="✅")
+
+    if col_b.button("Incorrect", key="fb_down", type="secondary"):
+        st.session_state["feedback_log"].append({
+            "device"     : device_name,
+            "feedback"   : "Incorrect",
+            "confidence" : data.get("confidence","--"),
+            "cdsco"      : data["cdsco"].get("risk_class","--"),
+            "fda"        : data["fda"].get("risk_class","--"),
+            "eu"         : data["eu"].get("risk_class","--"),
+        })
+        st.toast("Thanks! This helps improve accuracy.", icon="🔧")
+
+    # Show feedback log summary
+    if st.session_state["feedback_log"]:
+        with st.expander(
+            f"Feedback log ({len(st.session_state['feedback_log'])} entries)", expanded=False
+        ):
+            fb_df = pd.DataFrame(st.session_state["feedback_log"])
+            accurate_count   = (fb_df["feedback"] == "Accurate").sum()
+            incorrect_count  = (fb_df["feedback"] == "Incorrect").sum()
+            total            = len(fb_df)
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Total feedback",  total)
+            m2.metric("Accurate",        accurate_count,
+                      delta=f"{accurate_count/total*100:.0f}%")
+            m3.metric("Incorrect flags", incorrect_count,
+                      delta=f"-{incorrect_count/total*100:.0f}%" if incorrect_count else "0%")
+
+            st.dataframe(fb_df, use_container_width=True, hide_index=True)
+
+            csv_bytes = fb_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Export feedback CSV", data=csv_bytes,
+                file_name="classification_feedback.csv",
+                mime="text/csv"
+            )
+            if st.button("Clear feedback log", key="clear_feedback"):
+                st.session_state["feedback_log"] = []
+                st.rerun()
+
+
+
+# ── TRACK 6: REGULATORY NEWS FEED ────────────────────────────────────────────
+NEWS_QUERIES = {
+    "cdsco"         : "CDSCO India medical device regulation update 2025",
+    "fda"           : "FDA medical device regulation update clearance 2025",
+    "eu"            : "EU MDR CE Mark medical device regulation update 2025",
+    "health_canada" : "Health Canada medical device regulation update 2025",
+    "japan"         : "Japan PMDA medical device regulation update 2025",
+    "australia"     : "Australia TGA medical device regulation update 2025",
+    "russia"        : "Roszdravnadzor Russia medical device registration update 2025",
+}
+
+def fetch_regulatory_news(framework_key):
+    """Fetch recent regulatory news for a framework using Groq."""
+    cache_key = framework_key
+    if cache_key in st.session_state.get("news_cache", {}):
+        return st.session_state["news_cache"][cache_key]
+
+    query = NEWS_QUERIES.get(framework_key, "medical device regulation news 2025")
+    prompt = f"""Search for and summarise the 3 most recent regulatory updates for:
+{FRAMEWORKS[framework_key]["label"]}
+
+Search query to use: {query}
+
+Return a JSON list of 3 news items:
+[
+  {{
+    "title": "short headline",
+    "summary": "2-3 sentence summary of the regulatory change",
+    "relevance": "why this matters for device manufacturers"
+  }}
+]
+Return ONLY the JSON array."""
+
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role":"user","content":prompt}],
+            temperature=0.3,
+            max_tokens=800,
+        )
+        raw = response.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"): raw = raw[4:]
+        result = json.loads(raw.strip())
+        if "news_cache" not in st.session_state:
+            st.session_state["news_cache"] = {}
+        st.session_state["news_cache"][cache_key] = result
+        return result
+    except Exception:
+        return [{"title": "News unavailable",
+                 "summary": "Could not fetch regulatory news at this time.",
+                 "relevance": "Please check official regulatory authority websites."}]
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## Regulatory Navigator")
@@ -1058,6 +1178,36 @@ with st.sidebar:
     st.divider()
     analyse = st.button("Analyse Device",type="primary",use_container_width=True)
 
+    # ── Regulatory news feed ─────────────────────────────────────────────────
+    st.divider()
+    with st.expander("Regulatory news feed", expanded=False):
+        st.caption("Recent updates from selected frameworks. AI-summarised.")
+        if selected_fws:
+            news_tabs = st.tabs([FRAMEWORKS[fw]["label"][:8] for fw in selected_fws])
+            for tab, fw in zip(news_tabs, selected_fws):
+                with tab:
+                    if st.button(
+                        f"Fetch {FRAMEWORKS[fw]['label']} news",
+                        key=f"news_btn_{fw}"
+                    ):
+                        with st.spinner("Fetching news..."):
+                            news_items = fetch_regulatory_news(fw)
+                        for item in news_items:
+                            st.markdown(f"**{item.get('title','')}**")
+                            st.caption(item.get("summary",""))
+                            if item.get("relevance"):
+                                st.info(item["relevance"], icon="ℹ️")
+                            st.markdown("---")
+                    elif fw in st.session_state.get("news_cache", {}):
+                        for item in st.session_state["news_cache"][fw]:
+                            st.markdown(f"**{item.get('title','')}**")
+                            st.caption(item.get("summary",""))
+                            st.markdown("---")
+                    else:
+                        st.caption("Click button above to fetch latest news.")
+        else:
+            st.caption("Select at least one market above.")
+
     if st.session_state.search_history:
         st.divider(); st.subheader("History")
         for i,h in enumerate(reversed(st.session_state.search_history[-5:])):
@@ -1074,7 +1224,19 @@ with st.sidebar:
 
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown("## MedTech Regulatory Pathway Navigator")
-st.markdown("*AI-powered classification across 7 global regulatory frameworks*")
+col_h1, col_h2 = st.columns([4,1])
+with col_h1:
+    st.markdown("*AI-powered classification across 7 global regulatory frameworks*")
+with col_h2:
+    st.markdown(
+        "<div style='text-align:right'>"
+        "<span style='background:var(--color-background-secondary);"
+        "border:0.5px solid var(--color-border-tertiary);"
+        "border-radius:20px;padding:3px 10px;font-size:11px;"
+        "color:var(--color-text-secondary)'>v2.0 · 7 frameworks</span>"
+        "</div>",
+        unsafe_allow_html=True
+    )
 st.divider()
 
 # ── CHATBOT QUEUE PROCESSOR — pure Python, zero st.* calls ───────────────────
@@ -1244,6 +1406,11 @@ if analyse_show and data:
             st.rerun()
     else:
         st.info("Click a quick question or type your own and press Send.")
+
+    st.divider()
+
+    # Feedback
+    show_feedback_ui(data, selected_fws)
 
     st.divider()
 
