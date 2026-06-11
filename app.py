@@ -859,33 +859,82 @@ def generate_pdf(data, selected_fws, data2=None, selected_fws2=None,
     return bytes(pdf.output())
 
 def build_world_map(data, selected_fws, prefix=""):
-    countries,timelines,hover = [],[],[]
+    countries, timelines, hover = [], [], []
     for fw in selected_fws:
         c = COUNTRY_MAP.get(fw)
         if not c: continue
-        t  = int(data[fw].get("timeline_months",0))
-        rc = data[fw].get("risk_class","--")
-        pw = data[fw].get(PATHWAY_KEY.get(fw,""),"--")
-        rl = data[fw].get("rule_applied","--")
-        countries.append(c["code"]); timelines.append(t)
-        hover.append(f"<b>{c['name']}</b><br>Framework: {FRAMEWORKS[fw]['label']}<br>"
-                     f"Risk class: {rc}<br>Pathway: {pw}<br>Rule: {rl}<br>Timeline: <b>{t} months</b>")
-    if not countries: return None
+        t  = int(data[fw].get("timeline_months", 0))
+        rc = data[fw].get("risk_class", "--")
+        pw = data[fw].get(PATHWAY_KEY.get(fw, ""), "--")
+        rl = data[fw].get("rule_applied", "--")
+        countries.append(c["code"])
+        timelines.append(t)
+        hover.append(
+            f"<b>{c['name']}</b><br>"
+            f"Framework: {FRAMEWORKS[fw]['label']}<br>"
+            f"Risk class: {rc}<br>"
+            f"Pathway: {pw}<br>"
+            f"Rule: {rl}<br>"
+            f"Timeline: <b>{t} months</b>"
+        )
+    if not countries:
+        return None
+
+    # Fix: when all timelines are equal, zmin=zmax crashes Plotly
+    # Ensure there is always a range by padding by at least 1
+    z_min = min(timelines)
+    z_max = max(timelines)
+    if z_min == z_max:
+        z_min = max(0, z_min - 1)
+        z_max = z_max + 1
+
     fig = go.Figure(go.Choropleth(
-        locations=countries,z=timelines,text=hover,hovertemplate="%{text}<extra></extra>",
+        locations=countries,
+        z=timelines,
+        text=hover,
+        hovertemplate="%{text}<extra></extra>",
         locationmode="ISO-3",
-        colorscale=[[0.0,"#1D9E75"],[0.35,"#BA7517"],[0.65,"#D85A30"],[1.0,"#E24B4A"]],
-        zmin=min(timelines),zmax=max(timelines),
-        colorbar=dict(title=dict(text="Months",font=dict(size=11)),thickness=15,len=0.6,x=1.0),
-        marker_line_color="white",marker_line_width=0.8,
+        colorscale=[
+            [0.0,  "#1D9E75"],
+            [0.35, "#BA7517"],
+            [0.65, "#D85A30"],
+            [1.0,  "#E24B4A"],
+        ],
+        zmin=z_min,
+        zmax=z_max,
+        colorbar=dict(
+            title=dict(text="Months to approval", font=dict(size=11)),
+            thickness=15,
+            len=0.6,
+            x=1.01,
+            tickfont=dict(size=10),
+        ),
+        marker_line_color="white",
+        marker_line_width=0.8,
     ))
+
     fig.update_layout(
-        geo=dict(showframe=False,showcoastlines=True,coastlinecolor="#bbbbbb",showland=True,
-                 landcolor="#f5f3ef",showocean=True,oceancolor="#d0e8f5",showlakes=True,
-                 lakecolor="#d0e8f5",showcountries=True,countrycolor="#cccccc",
-                 projection_type="natural earth",bgcolor="rgba(0,0,0,0)"),
-        margin=dict(l=0,r=90,t=20,b=10),height=440,
-        paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",dragmode="pan",
+        geo=dict(
+            showframe=False,
+            showcoastlines=True,
+            coastlinecolor="#bbbbbb",
+            showland=True,
+            landcolor="#f0ede8",
+            showocean=True,
+            oceancolor="#cce5f5",
+            showlakes=True,
+            lakecolor="#cce5f5",
+            showcountries=True,
+            countrycolor="#cccccc",
+            projection_type="natural earth",
+            lataxis_range=[-55, 80],
+            lonaxis_range=[-160, 170],
+        ),
+        margin=dict(l=0, r=100, t=30, b=10),
+        height=450,
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        dragmode="pan",
     )
     return fig
 
