@@ -13,6 +13,20 @@ st.set_page_config(page_title="MedTech Regulatory Navigator", page_icon="🧬", 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 client = Groq(api_key=GROQ_API_KEY)
 
+# ── APP CONFIGURATION — change these in one place ────────────────────────────
+GROQ_MODEL        = "llama-3.3-70b-versatile"  # model for all API calls
+TEMP_CLASSIFY     = 0.1   # low = more deterministic classification
+TEMP_CHAT         = 0.2   # slightly higher for natural chat responses
+TEMP_EXTRACT      = 0.1   # PDF extraction needs precision
+MAX_TOKENS_CHAT   = 700
+MAX_TOKENS_EXTRACT= 400
+MAX_TOKENS_GAP    = 2000
+MAX_TOKENS_NEWS   = 800
+PDF_MAX_CHARS     = 3000  # max chars extracted from uploaded PDF
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 for _k, _v in {
     "classify_cache"     : {},
     "search_history"     : [],
@@ -241,15 +255,21 @@ Return exactly this JSON:
   "confidence":"High/Medium/Low","disclaimer":""
 }}"""
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=GROQ_MODEL,
         messages=[{"role":"user","content":prompt}],
-        temperature=0.1
+        temperature=TEMP_CLASSIFY
     )
     raw = response.choices[0].message.content.strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"): raw = raw[4:]
-    result = json.loads(raw.strip())
+    try:
+        result = json.loads(raw.strip())
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"AI returned invalid JSON. This happens occasionally - "
+            f"please try again. (Detail: {e})"
+        )
     result = validate_and_correct(result)
     st.session_state.classify_cache[cache_key] = result
     return result
@@ -284,14 +304,14 @@ def regulatory_chat(question, device_data):
         messages.append({"role":"assistant", "content":turn["answer"]})
     messages.append({"role":"user","content":question})
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=GROQ_MODEL,
         messages=messages,
-        temperature=0.2,
-        max_tokens=700,
+        temperature=TEMP_CHAT,
+        max_tokens=MAX_TOKENS_CHAT,
     )
     return response.choices[0].message.content.strip()
 
-def extract_pdf_text(uploaded_file, max_chars=3000):
+def extract_pdf_text(uploaded_file, max_chars=PDF_MAX_CHARS):
     try:
         pdf_bytes  = uploaded_file.read()
         doc        = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -311,9 +331,9 @@ Extract key information from this device document. Return ONLY valid JSON.
 Document: {pdf_text}
 Return: {{"device_name":"specific name","intended_use":"one sentence","description":"2-3 sentences","confidence":"High/Medium/Low"}}"""
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=GROQ_MODEL,
         messages=[{"role":"user","content":prompt}],
-        temperature=0.1, max_tokens=400,
+        temperature=TEMP_CLASSIFY, max_tokens=MAX_TOKENS_EXTRACT,
     )
     raw = response.choices[0].message.content.strip()
     if raw.startswith("```"):
@@ -446,15 +466,18 @@ Return ONLY valid JSON:
 }}
 Keys to use: {list(selected_fws)}"""
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=GROQ_MODEL,
         messages=[{"role":"user","content":prompt}],
-        temperature=0.1, max_tokens=2000,
+        temperature=TEMP_CLASSIFY, max_tokens=MAX_TOKENS_GAP,
     )
     raw = response.choices[0].message.content.strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"): raw = raw[4:]
-    return json.loads(raw.strip())
+    try:
+        return json.loads(raw.strip())
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Gap analysis returned invalid JSON. Please try again. ({e})")
 
 def show_gap_analysis_ui(device_data, selected_fws):
     st.subheader("Submission document gap analysis")
@@ -688,12 +711,24 @@ def show_gantt_chart(data, selected_fws):
     st.dataframe(pd.DataFrame(mil_rows),use_container_width=True,hide_index=True)
 
 def safe_pdf(t):
+    """Convert any string to FPDF-safe Latin-1 encoding.
+    Replaces common unicode characters with ASCII equivalents
+    before falling back to latin-1 with error replacement.
+    """
     s = str(t)
-    for uc,ac in [("\u2014","-"),("\u2013","-"),("\u2018","'"),("\u2019","'"),
-                  ("\u201c",'"'),("\u201d",'"'),("\u2026","..."),
-                  ("\u00ae","(R)"),("\u00a9","(C)")]:
-        s = s.replace(uc,ac)
-    return s.encode("latin-1",errors="replace").decode("latin-1")
+    replacements = {
+        "\u2014":"-", "\u2013":"-", "\u2012":"-", "\u2010":"-",
+        "\u2018":"'","\u2019":"'","\u201c":'"',"\u201d":'"',
+        "\u2026":"...","\u2192":"->","\u2190":"<-","\u00b0":"deg",
+        "\u00b5":"u","\u00d7":"x","\u00f7":"/","\u2264":"<=",
+        "\u2265":">=","\u00ae":"(R)","\u00a9":"(C)","\u2122":"(TM)",
+        "\u00a0":" ","\u2003":" ","\u2002":" ","\u00bc":"1/4",
+        "\u00bd":"1/2","\u00be":"3/4","\u2030":"per mille",
+        "\u20ac":"EUR","\u00a3":"GBP","\u00a5":"JPY",
+    }
+    for uc, ac in replacements.items():
+        s = s.replace(uc, ac)
+    return s.encode("latin-1", errors="replace").decode("latin-1")
 
 def generate_pdf(data, selected_fws, data2=None, selected_fws2=None,
                  gap_result=None, cost_data=None):
@@ -1128,10 +1163,10 @@ Return ONLY the JSON array."""
 
     try:
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=GROQ_MODEL,
             messages=[{"role":"user","content":prompt}],
-            temperature=0.3,
-            max_tokens=800,
+            temperature=TEMP_CHAT,
+            max_tokens=MAX_TOKENS_NEWS,
         )
         raw = response.choices[0].message.content.strip()
         if raw.startswith("```"):
@@ -1146,6 +1181,22 @@ Return ONLY the JSON array."""
         return [{"title": "News unavailable",
                  "summary": "Could not fetch regulatory news at this time.",
                  "relevance": "Please check official regulatory authority websites."}]
+
+
+
+# ── Helper utilities ──────────────────────────────────────────────────────────
+def get_pathway(data, fw):
+    """Get the pathway/licence value for a framework from classification data."""
+    return data[fw].get(PATHWAY_KEY.get(fw, ""), "--")
+
+def get_timeline(data, fw):
+    """Get timeline months as int for a framework."""
+    return int(data[fw].get("timeline_months", 0))
+
+def get_risk_label(data, fw):
+    """Get human-readable risk level string for a framework."""
+    rc = data[fw].get("risk_class", "?")
+    return rc, RISK_LEVEL.get(rc, "Unknown"), RISK_COLOR.get(RISK_LEVEL.get(rc, "Unknown"), "#888")
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -1323,6 +1374,7 @@ elif analyse and device_name.strip():
                 st.error(f"Device 2 failed: {e}"); data2=None
     st.session_state["chat_history"]=[]; st.session_state["current_device"]=data
     st.session_state["last_data"]=data; st.session_state["last_data2"]=data2
+    st.session_state["pdf_device_name"]=""; st.session_state["pdf_device_desc"]=""
     st.session_state["last_fws"]=list(selected_fws)
     st.session_state["last_compare"]=bool(compare_mode and data2 is not None)
     st.session_state["gap_result"]=None
